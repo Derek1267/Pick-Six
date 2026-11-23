@@ -42,7 +42,8 @@ create table if not exists public.games (
   sport       text not null,               -- 'nfl'
   season      int  not null,               -- e.g. 2026
   season_type int  not null,               -- 1 pre, 2 regular, 3 post
-  week        int  not null,
+  week        int  not null,               -- NFL week; daily sports: week index (Mon–Sun)
+  slate       text,                        -- NFL "2-12"; daily sports: "2026-11-23" (US Eastern day)
   start_time  timestamptz not null,
   status      text not null default 'pre' check (status in ('pre', 'in', 'post')),
   status_detail text,                       -- e.g. "Q3 4:12", "Final"
@@ -180,12 +181,21 @@ begin
     raise exception 'League name is required';
   end if;
 
-  -- Default season: the latest season we have games for, else this year.
+  if p_sport not in ('nfl', 'nba', 'nhl', 'mlb') then
+    raise exception 'Unknown sport %', p_sport;
+  end if;
+
+  -- Default season: the one with upcoming games (else the latest loaded).
   v_season := coalesce(
     p_season,
-    (select max(season) from games where sport = p_sport),
-    extract(year from now())::int
+    (select season from games where sport = p_sport and start_time > now() - interval '2 days'
+       order by start_time limit 1),
+    (select max(season) from games where sport = p_sport
+       having max(start_time) > now() - interval '30 days')
   );
+  if v_season is null then
+    raise exception 'The % season hasn''t been loaded yet — check back when its schedule is out', upper(p_sport);
+  end if;
 
   loop
     v_code := '';
@@ -351,8 +361,8 @@ grant execute on function public.league_leaderboard(uuid)       to authenticated
 create table if not exists public.playoff_seeds (
   sport      text not null,
   season     int  not null,
-  conference text not null check (conference in ('AFC', 'NFC')),
-  seed       int  not null check (seed between 1 and 7),
+  conference text not null,                 -- AFC/NFC, East/West, AL/NL
+  seed       int  not null check (seed between 1 and 8),
   team_abbr  text not null,
   team_name  text not null,
   logo       text,
@@ -424,3 +434,21 @@ create policy "update bracket while open" on public.bracket_picks
   with check (user_id = auth.uid() and is_league_member(league_id) and bracket_state(league_id) = 'open');
 
 grant execute on function public.bracket_state(uuid) to authenticated;
+
+-- =====================================================================
+-- v3: NBA, NHL, MLB (safe to run on an existing database)
+-- =====================================================================
+
+alter table public.games add column if not exists slate text;
+update public.games set slate = season_type || '-' || week where slate is null and sport = 'nfl';
+create index if not exists games_slate on public.games (sport, season, slate);
+
+alter table public.playoff_seeds drop constraint if exists playoff_seeds_conference_check;
+alter table public.playoff_seeds drop constraint if exists playoff_seeds_seed_check;
+do $$ begin
+  alter table public.playoff_seeds add constraint playoff_seeds_seed_check check (seed between 1 and 8);
+exception when duplicate_object then null;
+end $$;
+
+-- Ask the API to pick up new columns right away.
+notify pgrst, 'reload schema';

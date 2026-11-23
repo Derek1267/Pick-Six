@@ -1,21 +1,29 @@
-name: Sync NFL games
+name: Sync games
 
 on:
   schedule:
-    # Every 15 minutes. GitHub may run scheduled jobs a few minutes late; that's fine —
+    # Every 15 minutes: live scores, finals, and the next few days/weeks of games.
+    # GitHub may run scheduled jobs a few minutes late; that's fine —
     # picks lock on the database clock at kickoff, not when this runs.
     - cron: '*/15 * * * *'
+    # Once a day: reload whole seasons (schedule changes, new seasons, playoff games).
+    - cron: '17 10 * * *'
   workflow_dispatch:
     inputs:
       full_season:
-        description: 'Load the whole season (use once at setup)'
+        description: 'Load whole seasons (use at setup)'
         type: boolean
         default: false
+      sport:
+        description: 'Which sport'
+        type: choice
+        default: all
+        options: [all, nfl, nba, nhl, mlb]
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,4 +33,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/sync-games.mjs ${{ inputs.full_season && '--all' || '' }}
+          FULL: ${{ inputs.full_season || github.event.schedule == '17 10 * * *' }}
+          SPORT: ${{ inputs.sport || 'all' }}
+        run: node scripts/sync-games.mjs --sport "$SPORT" $( [ "$FULL" = "true" ] && echo --all )

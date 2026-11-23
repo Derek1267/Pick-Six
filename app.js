@@ -2,11 +2,12 @@
 // Pages (hash routes):
 //   #/                      your leagues, create or join one
 //   #/join/ABC123           invite link — joins after sign-in
-//   #/league/<id>           weekly picks          (?tab=standings for the leaderboard, &week=2-12 for a week)
+//   #/league/<id>           picks by week (NFL) or by day (NBA/NHL/MLB)   (?week=2-12 or ?week=2026-11-23)
+//   #/league/<id>?tab=standings   leaderboard
 //   #/league/<id>?tab=bracket   playoff bracket + simulator
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { SUPABASE_URL, SUPABASE_ANON_KEY, SPORT } from './config.js';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 import * as BR from './bracket.js';
 
 const app = document.getElementById('app');
@@ -48,12 +49,55 @@ const friendlyError = (err) => {
   return msg;
 };
 
+export const SPORTS = {
+  nfl: { name: 'NFL', daily: false, unit: 'week' },
+  nba: { name: 'NBA', daily: true, unit: 'day' },
+  nhl: { name: 'NHL', daily: true, unit: 'day' },
+  mlb: { name: 'MLB', daily: true, unit: 'day' },
+};
+const sportInfo = (sport) => SPORTS[sport] || SPORTS.nfl;
+
 const weekKey = (type, week) => `${type}-${week}`;
 
-function weekLabel(type, week) {
+// NFL: "Week 12" / playoff round. Daily sports: "Week of Nov 17" (Mon–Sun).
+function weekLabel(type, week, sport = 'nfl') {
+  if (sportInfo(sport).daily) {
+    const monday = new Date(Date.UTC(2000, 0, 3) + week * 7 * 864e5);
+    const label = `Week of ${monday.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })}`;
+    return type === 3 ? `Playoffs · ${label}` : label;
+  }
   if (type === 3) return ['Wild Card', 'Divisional', 'Conference', 'Pro Bowl', 'Super Bowl'][week - 1] || `Playoffs ${week}`;
   if (type === 1) return `Preseason ${week}`;
   return `Week ${week}`;
+}
+
+const todayET = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
+
+function dayLabel(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d, 12));
+  const today = todayET();
+  const tomorrow = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(new Date(Date.now() + 864e5));
+  const base = date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  if (ymd === today) return `Today · ${base}`;
+  if (ymd === tomorrow) return `Tomorrow · ${base}`;
+  return base;
+}
+
+// Supabase returns at most 1,000 rows per request — page through a season.
+async function loadGames(sport, season) {
+  const all = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('games').select('*').eq('sport', sport).eq('season', season)
+      .order('start_time').order('id').range(from, from + 999);
+    if (error) throw error;
+    all.push(...data);
+    if (data.length < 1000) break;
+  }
+  return all;
 }
 
 function fmtKickoff(iso) {
@@ -104,6 +148,7 @@ async function render() {
   const myRender = ++state.renderId;
   const stale = () => myRender !== state.renderId; // a newer render started
 
+  app.classList.remove('wide');
   if (!configured) return renderSetupNeeded();
 
   const route = parseRoute();
@@ -275,7 +320,7 @@ async function renderHome(stale) {
   const cards = leagues.map((l) => `
     <a class="league-card" href="#/league/${l.id}">
       <span class="league-name">${esc(l.name)}</span>
-      <span class="muted small">${l.season} ${esc(l.sport.toUpperCase())} · ${l.league_members?.[0]?.count ?? 1} players</span>
+      <span class="muted small"><span class="sport-tag">${esc(sportInfo(l.sport).name)}</span> ${l.league_members?.[0]?.count ?? 1} players</span>
       <span class="arrow" aria-hidden="true">→</span>
     </a>`).join('');
 
@@ -292,6 +337,11 @@ async function renderHome(stale) {
       <form id="create-form" class="card stack">
         <h2>Start a league</h2>
         <input name="name" maxlength="50" required placeholder="League name, e.g. Sunday Crew">
+        <fieldset class="sport-pick">
+          <legend class="muted small">Sport</legend>
+          ${Object.entries(SPORTS).map(([key, info], i) => `
+            <label class="sport-option"><input type="radio" name="sport" value="${key}" ${i === 0 ? 'checked' : ''}><span>${info.name}</span></label>`).join('')}
+        </fieldset>
         <button class="btn" type="submit">Create league</button>
       </form>
       <form id="join-form" class="card stack">
@@ -303,8 +353,9 @@ async function renderHome(stale) {
 
   document.getElementById('create-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const name = new FormData(e.target).get('name').trim();
-    const { data, error } = await sb.rpc('create_league', { p_name: name, p_sport: SPORT });
+    const form = new FormData(e.target);
+    const name = form.get('name').trim();
+    const { data, error } = await sb.rpc('create_league', { p_name: name, p_sport: form.get('sport') || 'nfl' });
     if (error) return toast(friendlyError(error), 'error');
     toast(`${data.name} created — invite your friends!`, 'good');
     go(`#/league/${data.id}`);
@@ -336,13 +387,14 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
 
   const [membersRes, gamesRes] = await Promise.all([
     sb.from('league_members').select('user_id, role, profiles(display_name)').eq('league_id', league.id),
-    sb.from('games').select('*').eq('sport', league.sport).eq('season', league.season).order('start_time'),
+    loadGames(league.sport, league.season).then((data) => ({ data }), (error) => ({ data: [], error })),
   ]);
   if (stale()) return;
   const members = (membersRes.data || []).map((m) => ({
     user_id: m.user_id, role: m.role, name: m.profiles?.display_name || 'Player',
   }));
   const games = gamesRes.data || [];
+  app.classList.toggle('wide', route.tab === 'bracket');
 
   const head = `
     <section class="league-head">
@@ -351,7 +403,7 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
         <h1>${esc(league.name)}</h1>
         <button class="btn small secondary" id="invite-btn">Invite friends</button>
       </div>
-      <p class="muted small">${league.season} ${esc(league.sport.toUpperCase())} · ${members.length} player${members.length === 1 ? '' : 's'}
+      <p class="muted small"><span class="sport-tag">${esc(sportInfo(league.sport).name)}</span> ${members.length} player${members.length === 1 ? '' : 's'}
         · code <strong class="mono">${esc(league.invite_code)}</strong></p>
       <div class="tabs" role="tablist">
         <a role="tab" href="#/league/${league.id}" class="${route.tab === 'picks' ? 'active' : ''}">Picks</a>
@@ -400,33 +452,50 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
   }
 }
 
-function groupWeeks(games) {
-  const weeks = new Map();
+// A slate = the set of games you pick together: an NFL week, or one day for NBA/NHL/MLB.
+function groupSlates(games, sport) {
+  const daily = sportInfo(sport).daily;
+  const slates = new Map();
   for (const g of games) {
-    const k = weekKey(g.season_type, g.week);
-    if (!weeks.has(k)) weeks.set(k, { key: k, type: g.season_type, week: g.week, games: [] });
-    weeks.get(k).games.push(g);
+    const k = g.slate || weekKey(g.season_type, g.week);
+    if (!slates.has(k)) {
+      slates.set(k, { key: k, type: g.season_type, week: g.week, games: [],
+        label: daily ? dayLabel(k) : weekLabel(g.season_type, g.week, sport) });
+    }
+    slates.get(k).games.push(g);
   }
-  return [...weeks.values()].sort((a, b) => a.type - b.type || a.week - b.week);
+  return [...slates.values()].sort((a, b) => (daily
+    ? a.key.localeCompare(b.key)
+    : a.type - b.type || a.week - b.week));
 }
 
-function defaultWeek(weeks) {
+function defaultSlate(slates, sport) {
+  if (sportInfo(sport).daily) {
+    const today = todayET();
+    const upcoming = slates.find((s) => s.key >= today);
+    // Today, unless everything today is already final — then the next day with games.
+    if (upcoming?.key === today && upcoming.games.every((g) => g.status === 'post')) {
+      return (slates.find((s) => s.key > today) || upcoming).key;
+    }
+    return (upcoming || slates[slates.length - 1])?.key;
+  }
   // The first week that still has a game that isn't finished.
   const now = Date.now();
-  return (weeks.find((w) => w.games.some((g) => g.status !== 'post' && new Date(g.start_time) > now - 864e5))
-    || weeks[weeks.length - 1])?.key;
+  return (slates.find((w) => w.games.some((g) => g.status !== 'post' && new Date(g.start_time) > now - 864e5))
+    || slates[slates.length - 1])?.key;
 }
 
 // ----- Picks tab -----
 
 async function picksHtml(league, members, games, route) {
-  const weeks = groupWeeks(games);
+  const weeks = groupSlates(games, league.sport);
+  const unit = sportInfo(league.sport).unit;
   if (!weeks.length) {
     return `<div class="empty card"><p><strong>No games loaded yet.</strong>
-      Run the "Sync NFL games" GitHub Action (with "full season" ticked) to pull in the schedule.</p></div>`;
+      Run the "Sync games" GitHub Action (with "Load whole seasons" ticked) to pull in the schedule.</p></div>`;
   }
 
-  const key = weeks.some((w) => w.key === route.week) ? route.week : defaultWeek(weeks);
+  const key = weeks.some((w) => w.key === route.week) ? route.week : defaultSlate(weeks, league.sport);
   const idx = weeks.findIndex((w) => w.key === key);
   const wk = weeks[idx];
   const ids = wk.games.map((g) => g.id);
@@ -446,19 +515,19 @@ async function picksHtml(league, members, games, route) {
   const weekLink = (w) => `#/league/${league.id}?week=${w.key}`;
   const nav = `
     <div class="week-nav">
-      ${idx > 0 ? `<a class="btn icon ghost" href="${weekLink(weeks[idx - 1])}" aria-label="Previous week">‹</a>` : '<span class="btn icon ghost disabled">‹</span>'}
-      <select id="week-select" aria-label="Choose week">
-        ${weeks.map((w) => `<option value="${w.key}" ${w.key === key ? 'selected' : ''}>${weekLabel(w.type, w.week)}</option>`).join('')}
+      ${idx > 0 ? `<a class="btn icon ghost" href="${weekLink(weeks[idx - 1])}" aria-label="Previous ${unit}">‹</a>` : '<span class="btn icon ghost disabled">‹</span>'}
+      <select id="week-select" aria-label="Choose ${unit}">
+        ${weeks.map((w) => `<option value="${w.key}" ${w.key === key ? 'selected' : ''}>${esc(w.label)}${w.type === 3 && unit === 'day' ? ' · Playoffs' : ''}</option>`).join('')}
       </select>
-      ${idx < weeks.length - 1 ? `<a class="btn icon ghost" href="${weekLink(weeks[idx + 1])}" aria-label="Next week">›</a>` : '<span class="btn icon ghost disabled">›</span>'}
+      ${idx < weeks.length - 1 ? `<a class="btn icon ghost" href="${weekLink(weeks[idx + 1])}" aria-label="Next ${unit}">›</a>` : '<span class="btn icon ghost disabled">›</span>'}
     </div>`;
 
   const summary = `
     <div class="summary">
       ${open.length ? `<div><span class="big-num">${pickedOpen}/${open.length}</span><span class="muted small">open games picked</span></div>` : ''}
-      ${graded.length ? `<div><span class="big-num">${right}-${graded.length - right}</span><span class="muted small">this week</span></div>` : ''}
+      ${graded.length ? `<div><span class="big-num">${right}-${graded.length - right}</span><span class="muted small">this ${unit}</span></div>` : ''}
       ${nextLock ? `<div><span class="big-num">${fmtCountdown(nextLock.start_time)}</span><span class="muted small">until ${nextLock.away_abbr} @ ${nextLock.home_abbr} locks</span></div>` : ''}
-      ${!open.length && !graded.length ? '<div class="muted">All games for this week are locked.</div>' : ''}
+      ${!open.length && !graded.length ? `<div class="muted">All games for this ${unit} are locked.</div>` : ''}
     </div>`;
 
   const cards = wk.games.map((g) => gameCard(g, mine.get(g.id), picks, members, me)).join('');
@@ -561,6 +630,7 @@ async function makePick(league, gameId, side, btn) {
 // ----- Standings tab -----
 
 async function standingsHtml(league, members) {
+  const sport = league.sport;
   const { data: rows, error } = await sb.rpc('league_leaderboard', { p_league: league.id });
   if (error) return `<p class="error">${esc(friendlyError(error))}</p>`;
 
@@ -606,7 +676,7 @@ async function standingsHtml(league, members) {
   }).join('');
 
   const weeklyHtml = weekly.length ? weekly.map((w) => `
-    <li><span class="wk">${weekLabel(w.type, w.week)}</span>
+    <li><span class="wk">${weekLabel(w.type, w.week, sport)}</span>
       <span>${w.winners.length ? w.winners.map((r) => esc(r.display_name)).join(', ') : '<span class="muted">—</span>'}</span>
       <span class="muted small">${w.best} correct</span></li>`).join('')
     : '<li class="muted">Weekly winners show up once games go final.</li>';
@@ -628,61 +698,111 @@ async function standingsHtml(league, members) {
 
 const pct = (x) => (x >= 0.995 ? '>99%' : x < 0.005 ? (x > 0 ? '<1%' : '—') : `${Math.round(x * 100)}%`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const lsGet = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } };
+
+// Every team that appears in the loaded games, with its latest record.
+function teamsFromGames(games) {
+  const teams = new Map();
+  const parse = (rec) => {
+    const [w, l, t] = String(rec || '').split('-').map((n) => parseInt(n, 10));
+    return { wins: w || 0, losses: l || 0, ties: t || 0 };
+  };
+  for (const g of games) { // games are in start order, so later records win
+    for (const side of ['home', 'away']) {
+      const abbr = g[`${side}_abbr`];
+      if (!abbr) continue;
+      const prev = teams.get(abbr) || {};
+      const rec = g[`${side}_record`] ? parse(g[`${side}_record`]) : null;
+      teams.set(abbr, {
+        abbr, team_name: g[`${side}_team`] || abbr, logo: g[`${side}_logo`] || prev.logo || null,
+        ...(rec || { wins: prev.wins || 0, losses: prev.losses || 0, ties: prev.ties || 0 }),
+      });
+    }
+  }
+  return [...teams.values()].sort((a, b) => a.team_name.localeCompare(b.team_name));
+}
 
 async function mountBracket(league, members, games, stale) {
   const root = document.getElementById('bracket-root');
   const me = state.session.user.id;
+  const sport = league.sport;
+  const F = BR.formatOf(sport);
+  const [c0, c1] = F.conferences;
+  const total = BR.totalGames(sport);
+
   const [seedRes, stateRes, picksRes] = await Promise.all([
-    sb.from('playoff_seeds').select('*').eq('sport', league.sport).eq('season', league.season),
+    sb.from('playoff_seeds').select('*').eq('sport', sport).eq('season', league.season),
     sb.rpc('bracket_state', { p_league: league.id }),
     sb.from('bracket_picks').select('user_id, picks').eq('league_id', league.id),
   ]);
   if (stale()) return;
 
-  const seeds = BR.seedsByConference(seedRes.data);
-  if (!BR.isComplete(seeds)) {
-    root.innerHTML = `<div class="empty card"><p><strong>No playoff picture yet.</strong>
-      Seeds appear after the "Sync NFL games" Action runs.</p></div>`;
-    return;
+  const officialSeeds = BR.seedsByConference(seedRes.data, sport);
+  const haveSeeds = BR.isComplete(officialSeeds, sport);
+  // Team list for the just-for-fun field: everyone in the schedule, plus anyone in the seeds.
+  const allTeams = teamsFromGames(games);
+  for (const c of F.conferences) {
+    for (const t of officialSeeds[c] || []) {
+      if (!allTeams.some((x) => x.abbr === t.abbr)) allTeams.push({ ...t });
+    }
   }
-
+  allTeams.sort((a, b) => a.team_name.localeCompare(b.team_name));
+  const teamByAbbr = new Map(allTeams.map((t) => [t.abbr, t]));
   const bstate = stateRes.data || 'not_ready'; // not_ready | open | locked
-  const practiceKey = `pickSix.practiceBracket.${league.id}`;
   const brackets = picksRes.data || [];
-  let picks = {};
-  if (bstate === 'not_ready') {
-    try { picks = JSON.parse(localStorage.getItem(practiceKey) || '{}'); } catch { picks = {}; }
-  } else {
-    picks = brackets.find((b) => b.user_id === me)?.picks || {};
-  }
-  picks = BR.cleanPicks(seeds, picks);
 
-  const results = BR.actualResults(seeds, games);
-  const realWinners = new Set(Object.entries(results).map(([slot, abbr]) => `${BR.roundOf(slot)}:${abbr}`));
-  const eliminated = new Set();
-  for (const g of BR.allGames(BR.buildBracket(seeds, results))) {
-    if (g.winner) eliminated.add(g.winner === g.home ? g.away.abbr : g.home.abbr);
-  }
-  const firstKick = games.filter((g) => g.season_type === 3).map((g) => g.start_time).sort()[0];
-  const editable = bstate !== 'locked';
-  const oddsRows = BR.odds(seeds, 10000);
-  const odds = new Map(oddsRows.map((r) => [r.team.abbr, r]));
+  // ----- league bracket (practice before the season ends, then official) -----
+  const practiceKey = `pickSix.practiceBracket.${league.id}`;
+  let leaguePicks = bstate === 'not_ready'
+    ? lsGet(practiceKey, {})
+    : (brackets.find((b) => b.user_id === me)?.picks || {});
+  if (haveSeeds) leaguePicks = BR.cleanPicks(sport, officialSeeds, leaguePicks);
 
+  // ----- just-for-fun bracket: any teams you like, saved on this device -----
+  const funKey = `pickSix.funBracket.${sport}`;
+  const defaultField = () => {
+    if (haveSeeds) return Object.fromEntries(F.conferences.map((c) => [c, officialSeeds[c].map((t) => t.abbr)]));
+    const best = [...allTeams].sort((a, b) => BR.strength(b) - BR.strength(a)).slice(0, F.teams * 2);
+    return Object.fromEntries(F.conferences.map((c, ci) => [c, best.filter((_, i) => i % 2 === ci).map((t) => t.abbr)]));
+  };
+  const fun = lsGet(funKey, null) || { field: defaultField(), picks: {} };
+  const funSeeds = () => Object.fromEntries(F.conferences.map((c) => [c, (fun.field[c] || [])
+    .map((abbr, i) => ({ ...(teamByAbbr.get(abbr) || officialSeeds[c]?.find((t) => t.abbr === abbr) || { abbr, team_name: abbr, wins: 0, losses: 0, ties: 0 }), seed: i + 1 }))]));
+  const funReady = () => BR.isComplete(funSeeds(), sport);
+
+  let mode = haveSeeds ? 'league' : 'fun';
+  let editingField = false;
   let busy = false;
   let saveTimer;
   let saveNote = '';
+  let oddsCache = { sig: '', rows: [] };
 
-  const persist = () => {
-    if (bstate === 'not_ready') {
-      try { localStorage.setItem(practiceKey, JSON.stringify(picks)); } catch { /* private mode */ }
-      return;
+  const seeds = () => (mode === 'fun' ? funSeeds() : officialSeeds);
+  const getPicks = () => (mode === 'fun' ? fun.picks : leaguePicks);
+  const editable = () => mode === 'fun' || bstate !== 'locked';
+
+  const results = haveSeeds ? BR.actualResults(sport, officialSeeds, games) : {};
+  const realWinners = new Set(Object.entries(results).map(([slot, abbr]) => `${BR.roundOf(slot)}:${abbr}`));
+  const eliminated = new Set();
+  if (haveSeeds) {
+    for (const g of BR.allGames(sport, BR.buildBracket(sport, officialSeeds, results))) {
+      if (g.winner) eliminated.add(g.winner === g.home ? g.away.abbr : g.home.abbr);
     }
+  }
+  const firstKick = games.filter((g) => g.season_type === 3).map((g) => g.start_time).sort()[0];
+
+  const setPicks = (p) => {
+    const clean = BR.cleanPicks(sport, seeds(), p);
+    if (mode === 'fun') { fun.picks = clean; lsSet(funKey, fun); return; }
+    leaguePicks = clean;
+    if (bstate === 'not_ready') { lsSet(practiceKey, leaguePicks); return; }
     if (bstate !== 'open') return;
     saveNote = 'Saving…';
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       const { error } = await sb.from('bracket_picks').upsert(
-        { league_id: league.id, user_id: me, picks },
+        { league_id: league.id, user_id: me, picks: leaguePicks },
         { onConflict: 'league_id,user_id' },
       );
       saveNote = error ? '' : 'Saved ✓';
@@ -692,62 +812,124 @@ async function mountBracket(league, members, games, stale) {
     }, 500);
   };
 
+  const oddsRows = () => {
+    const s = seeds();
+    const sig = JSON.stringify(F.conferences.map((c) => s[c].map((t) => t.abbr)));
+    if (oddsCache.sig !== sig) oddsCache = { sig, rows: BR.odds(sport, s, 6000) };
+    return oddsCache.rows;
+  };
+
+  // ----- rendering -----
   const teamRow = (g, side) => {
     const t = g[side];
     if (!t) return '<div class="bt tbd">TBD</div>';
     const other = side === 'home' ? g.away : g.home;
-    const p = other ? (side === 'home' ? BR.winProb(g.home, g.away, g.neutral) : 1 - BR.winProb(g.home, g.away, g.neutral)) : null;
+    const pHome = other ? BR.winProb(g.home, g.away, g.neutral, g.bestOf) : null;
+    const p = pHome === null ? null : side === 'home' ? pHome : 1 - pHome;
     const picked = g.winner?.abbr === t.abbr;
     let result = '';
-    if (picked && realWinners.has(`${g.round}:${t.abbr}`)) result = 'correct';
-    else if (picked && eliminated.has(t.abbr)) result = 'wrong';
-    const out = eliminated.has(t.abbr) ? 'out' : '';
+    if (mode === 'league') {
+      if (picked && realWinners.has(`${g.round}:${t.abbr}`)) result = 'correct';
+      else if (picked && eliminated.has(t.abbr)) result = 'wrong';
+    }
+    const out = mode === 'league' && eliminated.has(t.abbr) ? 'out' : '';
     return `
       <button class="bt ${picked ? 'picked' : ''} ${result} ${out}" data-slot="${g.slot}" data-team="${esc(t.abbr)}"
-              ${editable && other && !busy ? '' : 'disabled'} aria-pressed="${picked}" title="${esc(t.team_name)} (${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ''})">
+              ${editable() && other && !busy ? '' : 'disabled'} aria-pressed="${picked}"
+              title="${esc(t.team_name)} (${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ''})">
         <span class="seed">${t.seed}</span>
         ${t.logo ? `<img src="${esc(t.logo)}" alt="" width="20" height="20" loading="lazy">` : ''}
         <span class="abbr">${esc(t.abbr)}</span>
         ${p !== null ? `<span class="prob">${pct(p)}</span>` : ''}
       </button>`;
   };
+  const matchup = (g) => `
+    <div class="bm ${g.winner ? 'done' : ''}">${teamRow(g, 'home')}${teamRow(g, 'away')}</div>`;
+  const roundLabel = (i, name = F.rounds[i]) => `<div class="round-label">${esc(name)}${F.bestOf[i] > 1
+    ? `<span class="bo-tag">Best of ${F.bestOf[i]}</span>` : ''}</div>`;
+  const byeCards = (b) => b.byes.map((t) => `<div class="bye"><span class="seed">${t.seed}</span> ${esc(t.abbr)} <span class="muted">bye</span></div>`).join('');
 
-  const matchup = (g) => `<div class="bm ${g.winner ? 'done' : ''}">${teamRow(g, 'home')}${teamRow(g, 'away')}</div>`;
-
-  const confHtml = (conf, b) => `
-    <section class="conf-block">
-      <h3 class="conf-name ${conf.toLowerCase()}">${conf}</h3>
-      <div class="bracket-grid">
-        <div class="round-label">Wild Card</div><div class="round-label">Divisional</div><div class="round-label">Conference</div>
-        <div class="round">
-          <div class="bye"><span class="seed">1</span> ${esc(b.bye.abbr)} <span class="muted">bye</span></div>
-          ${b.wc.map(matchup).join('')}
+  const bracketHtml = () => {
+    const s = seeds();
+    const b = BR.buildBracket(sport, s, getPicks());
+    const champ = b.F.winner;
+    const champOdds = champ ? oddsRows().find((r) => r.team.abbr === champ.abbr)?.champ : null;
+    const col = (cls, inner) => `<div class="round ${cls}">${inner}</div>`;
+    return `
+      <div class="bracket-scroll" tabindex="0" aria-label="Playoff bracket (scrolls sideways)">
+        <div class="bracket-full">
+          <div class="bf-conf left">${c0}</div>
+          <div class="bf-conf center">${esc(F.rounds[3])}</div>
+          <div class="bf-conf right">${c1}</div>
+          ${[0, 1, 2].map((i) => roundLabel(i)).join('')}
+          ${roundLabel(3, 'Final')}
+          ${[2, 1, 0].map((i) => roundLabel(i)).join('')}
+          ${col('', byeCards(b[c0]) + b[c0].r1.map(matchup).join(''))}
+          ${col('', b[c0].r2.map(matchup).join(''))}
+          ${col('', matchup(b[c0].r3))}
+          ${col('final-col', `
+            ${matchup(b.F)}
+            <div class="champion ${champ ? 'crowned' : ''}">
+              ${champ ? `<span class="trophy" aria-hidden="true">🏆</span>
+                <span class="champ-name">${esc(champ.team_name)}</span>
+                <span class="muted small">${pct(champOdds ?? 0)} title odds</span>`
+                : '<span class="muted small">Pick a champion</span>'}
+            </div>`)}
+          ${col('', matchup(b[c1].r3))}
+          ${col('', b[c1].r2.map(matchup).join(''))}
+          ${col('', byeCards(b[c1]) + b[c1].r1.map(matchup).join(''))}
         </div>
-        <div class="round">${b.div.map(matchup).join('')}</div>
-        <div class="round">${matchup(b.conf)}</div>
-      </div>
-    </section>`;
+      </div>`;
+  };
+
+  const fieldEditorHtml = () => {
+    if (!editingField) return '';
+    const options = (selected) => allTeams.map((t) =>
+      `<option value="${esc(t.abbr)}" ${t.abbr === selected ? 'selected' : ''}>${esc(t.team_name)} (${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ''})</option>`).join('');
+    return `
+      <section class="card field-editor">
+        <h2>Pick your playoff teams</h2>
+        <p class="muted small">Any ${sportInfo(sport).name} team, any seed. Picking a team that's already in swaps the two.</p>
+        <div class="field-cols">
+          ${F.conferences.map((c) => `
+            <div>
+              <h3 class="conf-name">${c}</h3>
+              ${(fun.field[c] || []).map((abbr, i) => `
+                <label class="field-row"><span class="seed">${i + 1}</span>
+                  <select data-field="${c}:${i}" aria-label="${c} seed ${i + 1}">${options(abbr)}</select>
+                </label>`).join('')}
+            </div>`).join('')}
+        </div>
+        <div class="row end"><button class="btn ghost small" data-action="reset-field">Reset to ${haveSeeds ? 'real seeds' : 'best records'}</button>
+          <button class="btn small" data-action="done-field">Done</button></div>
+      </section>`;
+  };
 
   const banner = () => {
-    const n = BR.pickCount(seeds, picks);
+    const n = BR.pickCount(sport, seeds(), getPicks());
+    if (mode === 'fun') {
+      return `<div class="banner fun"><strong>🎉 Just for fun.</strong> Build any bracket you like, even with your own teams.
+        It's saved on this device and doesn't count in your league. ${n}/${total} picked.</div>`;
+    }
     if (bstate === 'not_ready') {
-      return `<div class="banner"><strong>🔮 Projected bracket.</strong> Seeds are based on today's standings and change every week.
-        This is a practice bracket saved on this device. Real brackets open when the regular season ends.</div>`;
+      return `<div class="banner"><strong>🔮 Projected bracket.</strong> Seeds are based on today's standings and change as the season goes.
+        This practice bracket is saved on this device. Real brackets open when the regular season ends.</div>`;
     }
     if (bstate === 'open') {
-      return `<div class="banner open"><strong>Brackets are open!</strong> ${n}/13 picked.
-        ${firstKick ? `Locks at the first Wild Card kickoff: ${fmtKickoff(firstKick)} (${fmtCountdown(firstKick)}).` : 'Locks at the first Wild Card kickoff.'}
+      return `<div class="banner open"><strong>Brackets are open!</strong> ${n}/${total} picked.
+        ${firstKick ? `Locks when the playoffs start: ${fmtKickoff(firstKick)} (${fmtCountdown(firstKick)}).` : 'Locks when the playoffs start.'}
         <span class="save-note">${saveNote}</span></div>`;
     }
-    return '<div class="banner locked"><strong>🔒 Brackets are locked.</strong> Points per correct winner: Wild Card 1 · Divisional 2 · Conference 4 · Super Bowl 8.</div>';
+    return `<div class="banner locked"><strong>🔒 Brackets are locked.</strong> Points per correct winner:
+      ${F.rounds.map((r, i) => `${esc(r)} ${BR.ROUND_POINTS[BR.ROUND_KEYS[i]]}`).join(' · ')}.</div>`;
   };
 
   const standingsHtmlB = () => {
-    if (bstate !== 'locked') return '';
+    if (mode !== 'league' || bstate !== 'locked') return '';
     const rows = members.map((m) => {
       const bp = brackets.find((b) => b.user_id === m.user_id)?.picks;
-      const sc = bp ? BR.scoreBracket(seeds, bp, results) : null;
-      return { m, sc, champ: bp?.SB };
+      const sc = bp ? BR.scoreBracket(sport, officialSeeds, bp, results) : null;
+      return { m, sc, champ: bp?.F };
     }).sort((a, b) => (b.sc?.points ?? -1) - (a.sc?.points ?? -1) || (b.sc?.possible ?? -1) - (a.sc?.possible ?? -1));
     return `
       <section class="card flush">
@@ -764,87 +946,109 @@ async function mountBracket(league, members, games, stale) {
       </section>`;
   };
 
-  const oddsHtml = () => `
-    <section class="card">
-      <h2>Title odds</h2>
-      <p class="muted small">From 10,000 simulated playoffs using each team's record and home field.
-        It's a simple model. Your game predictor could replace it later.</p>
-      <div class="odds-wrap"><table class="odds">
-        <thead><tr><th>Team</th><th class="num">Divisional</th><th class="num">Conf. game</th><th class="num">Super Bowl</th><th class="num">Win it all</th></tr></thead>
-        <tbody>${oddsRows.map((r) => `
-          <tr>
-            <td><span class="seed">${r.team.seed}</span> <strong>${esc(r.team.abbr)}</strong> <span class="muted small">${r.conference}</span></td>
-            <td class="num">${pct(r.div)}</td><td class="num">${pct(r.conf)}</td><td class="num">${pct(r.sb)}</td>
-            <td class="num"><span class="bar" style="--w:${Math.round(r.champ * 100 / oddsRows[0].champ)}%"></span><strong>${pct(r.champ)}</strong></td>
-          </tr>`).join('')}</tbody>
-      </table></div>
-    </section>`;
+  const oddsHtml = () => {
+    const rows = oddsRows();
+    const top = rows[0]?.champ || 1;
+    return `
+      <section class="card">
+        <h2>Title odds</h2>
+        <p class="muted small">From thousands of simulated playoffs using each team's record and home advantage${F.bestOf[0] > 1 ? ', played as full series' : ''}.
+          It's a simple model. Your game predictor could replace it later.</p>
+        <div class="odds-wrap"><table class="odds">
+          <thead><tr><th>Team</th><th class="num">${esc(F.rounds[1])}</th><th class="num">${esc(F.rounds[2])}</th><th class="num">${esc(F.rounds[3])}</th><th class="num">Champion</th></tr></thead>
+          <tbody>${rows.map((r) => `
+            <tr>
+              <td><span class="seed">${r.team.seed}</span> <strong>${esc(r.team.abbr)}</strong> <span class="muted small">${esc(r.conference)}</span></td>
+              <td class="num">${pct(r.r2)}</td><td class="num">${pct(r.r3)}</td><td class="num">${pct(r.final)}</td>
+              <td class="num"><span class="bar" style="--w:${Math.round((r.champ * 100) / top)}%"></span><strong>${pct(r.champ)}</strong></td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+      </section>`;
+  };
 
   const draw = () => {
-    const b = BR.buildBracket(seeds, picks);
-    const n = BR.pickCount(seeds, picks);
-    const champ = b.SB.winner;
-    const simLabel = n === 13 ? '🎲 Re-simulate' : n ? '🎲 Simulate the rest' : '🎲 Simulate';
+    if (mode === 'fun' && !funReady()) {
+      root.innerHTML = `<div class="empty card"><p><strong>No ${sportInfo(sport).name} teams loaded yet.</strong>
+        Brackets appear once the schedule has synced.</p></div>`;
+      return;
+    }
+    const n = BR.pickCount(sport, seeds(), getPicks());
+    const simLabel = n === total ? '🎲 Re-simulate' : n ? '🎲 Simulate the rest' : '🎲 Simulate';
     root.innerHTML = `
+      <div class="mode-switch" role="tablist" aria-label="Bracket type">
+        <button role="tab" data-mode="league" aria-selected="${mode === 'league'}" class="${mode === 'league' ? 'active' : ''}" ${haveSeeds ? '' : 'disabled title="Playoff seeds haven\'t loaded yet"'}>League bracket</button>
+        <button role="tab" data-mode="fun" aria-selected="${mode === 'fun'}" class="${mode === 'fun' ? 'active' : ''}">Just for fun</button>
+      </div>
       ${banner()}
-      ${editable ? `
+      ${editable() ? `
         <div class="bracket-controls">
-          <button class="btn" data-action="simulate" ${busy ? 'disabled' : ''}>${simLabel}</button>
+          <button class="btn sim" data-action="simulate" ${busy ? 'disabled' : ''}>${simLabel}</button>
           <button class="btn secondary" data-action="favorites" ${busy ? 'disabled' : ''}>Pick favorites</button>
           <button class="btn ghost" data-action="clear" ${busy || !n ? 'disabled' : ''}>Clear</button>
+          ${mode === 'fun' ? `<button class="btn ghost" data-action="edit-field" ${busy ? 'disabled' : ''}>✎ Choose teams</button>` : ''}
         </div>` : ''}
+      ${fieldEditorHtml()}
       ${standingsHtmlB()}
-      <div class="bracket">
-        ${confHtml('AFC', b.AFC)}
-        ${confHtml('NFC', b.NFC)}
-        <section class="sb-block">
-          <h3 class="conf-name sb">Super Bowl</h3>
-          ${matchup(b.SB)}
-          <div class="champion ${champ ? 'crowned' : ''}">
-            ${champ ? `<span class="trophy">🏆</span><span class="champ-name">${esc(champ.team_name)}</span>
-              <span class="muted small">${pct(odds.get(champ.abbr)?.champ ?? 0)} title odds</span>`
-              : '<span class="muted">Pick a champion</span>'}
-          </div>
-        </section>
-      </div>
+      ${bracketHtml()}
       ${oddsHtml()}`;
   };
 
   // Reveal a simulated bracket one round at a time.
   const animateTo = async (target) => {
     busy = true;
-    const order = ['WC', 'DIV', 'CONF', 'SB'];
-    for (const r of order) {
-      for (const [slot, abbr] of Object.entries(target)) if (BR.roundOf(slot) === r) picks[slot] = abbr;
-      picks = BR.cleanPicks(seeds, picks);
+    const p = { ...getPicks() };
+    for (const r of BR.ROUND_KEYS) {
+      for (const [slot, abbr] of Object.entries(target)) if (BR.roundOf(slot) === r) p[slot] = abbr;
+      setPicks(p);
       draw();
-      await sleep(380);
+      await sleep(360);
     }
     busy = false;
     draw();
-    persist();
   };
 
   root.onclick = (e) => {
     if (busy) return;
     const team = e.target.closest('[data-slot]');
     if (team && !team.disabled) {
-      picks = BR.cleanPicks(seeds, { ...picks, [team.dataset.slot]: team.dataset.team });
+      setPicks({ ...getPicks(), [team.dataset.slot]: team.dataset.team });
       draw();
-      persist();
       return;
     }
+    const modeBtn = e.target.closest('[data-mode]');
+    if (modeBtn && !modeBtn.disabled) { mode = modeBtn.dataset.mode; editingField = false; draw(); return; }
     const action = e.target.closest('[data-action]')?.dataset.action;
-    const full = BR.pickCount(seeds, picks) === 13;
+    if (!action) return;
+    const full = BR.pickCount(sport, seeds(), getPicks()) === total;
     if (action === 'simulate' || action === 'favorites') {
-      if (full) picks = {}; // full bracket → start over
-      const target = action === 'simulate' ? BR.simulate(seeds, picks) : BR.favorites(seeds, picks);
-      animateTo(target);
+      if (full) setPicks({}); // full bracket → start over
+      const base = getPicks();
+      animateTo(action === 'simulate' ? BR.simulate(sport, seeds(), base) : BR.favorites(sport, seeds(), base));
     } else if (action === 'clear') {
-      picks = {};
-      draw();
-      persist();
+      setPicks({}); draw();
+    } else if (action === 'edit-field') {
+      editingField = !editingField; draw();
+    } else if (action === 'done-field') {
+      editingField = false; draw();
+    } else if (action === 'reset-field') {
+      fun.field = defaultField(); fun.picks = {}; lsSet(funKey, fun); draw();
     }
+  };
+
+  root.onchange = (e) => {
+    const sel = e.target.closest('select[data-field]');
+    if (!sel) return;
+    const [conf, idx] = sel.dataset.field.split(':');
+    const abbr = sel.value;
+    // If the team is already in the field, swap the two spots.
+    for (const c of F.conferences) {
+      const j = fun.field[c].indexOf(abbr);
+      if (j >= 0) fun.field[c][j] = fun.field[conf][Number(idx)];
+    }
+    fun.field[conf][Number(idx)] = abbr;
+    fun.picks = BR.cleanPicks(sport, funSeeds(), fun.picks);
+    lsSet(funKey, fun);
+    draw();
   };
 
   draw();

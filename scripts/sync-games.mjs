@@ -1,27 +1,48 @@
 #!/usr/bin/env node
-// Pick Six — pulls real NFL schedules and scores from ESPN's public scoreboard
-// and saves them into the Supabase "games" table.
+// Pick Six — pulls real schedules, scores and playoff seeds from ESPN's public
+// scoreboard/standings feeds and saves them into Supabase.
+//
+// Sports: nfl (weekly slates), nba, nhl, mlb (daily slates).
 //
 // Usage:
-//   node scripts/sync-games.mjs              # last week, this week, next week
-//   node scripts/sync-games.mjs --all        # whole season (run once at setup)
-//   node scripts/sync-games.mjs --dry-run    # print what would be saved, save nothing
-//   node scripts/sync-games.mjs --fixture f.json --dry-run   # parse a saved ESPN response (testing)
+//   node scripts/sync-games.mjs                  # every sport: recent + upcoming games
+//   node scripts/sync-games.mjs --sport nba      # one sport
+//   node scripts/sync-games.mjs --all            # whole season(s) (setup, and once a day)
+//   node scripts/sync-games.mjs --dry-run        # print what would be saved, save nothing
+//   node scripts/sync-games.mjs --sport nfl --fixture f.json [--standings-fixture s.json] --dry-run   (testing)
 //
 // Needs env vars (except with --dry-run): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 // No npm packages required — Node 18+ has fetch built in.
 
 import { readFile } from 'node:fs/promises';
 
-const SPORTS = {
+export const SPORTS = {
   nfl: {
     path: 'football/nfl',
+    mode: 'weekly',
+    conferences: [['AFC', ['AFC', 'AMERICAN FOOTBALL']], ['NFC', ['NFC', 'NATIONAL FOOTBALL']]],
     playoffTeams: 7, // per conference
-    // [seasonType, lastWeek] — 2 = regular season, 3 = postseason
-    weeks: { 2: 18, 3: 5 },
+    weeks: { 2: 18, 3: 5 }, // seasonType → last week (2 regular, 3 postseason)
     skip: (seasonType, week) => seasonType === 3 && week === 4, // Pro Bowl
   },
-  // Add more later, e.g. college football: { path: 'football/college-football', ... }
+  nba: {
+    path: 'basketball/nba',
+    mode: 'daily',
+    conferences: [['East', ['EAST']], ['West', ['WEST']]],
+    playoffTeams: 8,
+  },
+  nhl: {
+    path: 'hockey/nhl',
+    mode: 'daily',
+    conferences: [['East', ['EAST']], ['West', ['WEST']]],
+    playoffTeams: 8,
+  },
+  mlb: {
+    path: 'baseball/mlb',
+    mode: 'daily',
+    conferences: [['AL', ['AMERICAN LEAGUE', ' AL']], ['NL', ['NATIONAL LEAGUE', ' NL']]],
+    playoffTeams: 6,
+  },
 };
 
 const args = process.argv.slice(2);
@@ -31,34 +52,56 @@ const option = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
-const SPORT = option('--sport') || 'nfl';
 const DRY_RUN = flag('--dry-run');
 const ALL = flag('--all');
 const FIXTURE = option('--fixture');
-const cfg = SPORTS[SPORT];
-if (!cfg) throw new Error(`Unknown sport "${SPORT}". Options: ${Object.keys(SPORTS).join(', ')}`);
+const STANDINGS_FIXTURE = option('--standings-fixture');
+const SPORT_ARG = option('--sport') || (FIXTURE ? 'nfl' : 'all');
 
-const BASE = `https://site.api.espn.com/apis/site/v2/sports/${cfg.path}/scoreboard`;
-
-async function getScoreboard(params = {}) {
-  const url = new URL(BASE);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+const espn = async (url) => {
   const res = await fetch(url, { headers: { 'User-Agent': 'pick-six-sync' } });
   if (!res.ok) throw new Error(`ESPN ${res.status} for ${url}`);
   return res.json();
+};
+
+async function getScoreboard(sport, params = {}) {
+  const url = new URL(`https://site.api.espn.com/apis/site/v2/sports/${SPORTS[sport].path}/scoreboard`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return espn(url);
 }
 
-// Turn one ESPN event into one row for our games table.
-export function toGameRow(event, sport = SPORT) {
+// ---------------------------------------------------------------------------
+// Dates: daily sports are grouped by US Eastern calendar day ("slate"),
+// and by Monday–Sunday week for weekly winners.
+// ---------------------------------------------------------------------------
+
+const etDate = (iso) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date(iso)); // "2026-11-23"
+
+const WEEK_EPOCH = Date.UTC(2000, 0, 3); // a Monday
+export const weekIndexOf = (ymd) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return Math.floor((Date.UTC(y, m - 1, d) - WEEK_EPOCH) / (7 * 864e5));
+};
+
+const ymdCompact = (d) => d.toISOString().slice(0, 10).replaceAll('-', '');
+const addDays = (d, n) => new Date(d.getTime() + n * 864e5);
+
+// ---------------------------------------------------------------------------
+// ESPN event → games row
+// ---------------------------------------------------------------------------
+
+export function toGameRow(event, sport) {
   const comp = event.competitions?.[0];
   if (!comp) return null;
-  const home = comp.competitors.find((c) => c.homeAway === 'home');
-  const away = comp.competitors.find((c) => c.homeAway === 'away');
+  const home = comp.competitors?.find((c) => c.homeAway === 'home');
+  const away = comp.competitors?.find((c) => c.homeAway === 'away');
   if (!home || !away) return null;
 
   const statusType = (event.status || comp.status)?.type || {};
   const state = ['pre', 'in', 'post'].includes(statusType.state) ? statusType.state : 'pre';
-  const num = (s) => (s === undefined || s === null || s === '' ? null : Number(s));
+  const num = (s) => (s === undefined || s === null || s === '' ? null : Number(typeof s === 'object' ? s.value : s));
   const homeScore = state === 'pre' ? null : num(home.score);
   const awayScore = state === 'pre' ? null : num(away.score);
 
@@ -71,13 +114,19 @@ export function toGameRow(event, sport = SPORT) {
   const record = (c) => c.records?.find((r) => r.type === 'total' || r.name === 'overall')?.summary
     ?? c.records?.[0]?.summary ?? null;
 
+  const startIso = new Date(event.date).toISOString();
+  const seasonType = event.season?.type;
+  const daily = SPORTS[sport].mode === 'daily';
+  const slateDay = etDate(startIso);
+
   return {
-    id: String(event.id),
+    id: `${sport === 'nfl' ? '' : `${sport}-`}${event.id}`, // NFL ids kept as-is for existing data
     sport,
     season: event.season?.year,
-    season_type: event.season?.type,
-    week: event.week?.number,
-    start_time: new Date(event.date).toISOString(),
+    season_type: seasonType,
+    week: daily ? weekIndexOf(slateDay) : event.week?.number,
+    slate: daily ? slateDay : `${seasonType}-${event.week?.number}`,
+    start_time: startIso,
     status: state,
     status_detail: statusType.shortDetail || statusType.detail || null,
     home_team: home.team.displayName,
@@ -95,17 +144,18 @@ export function toGameRow(event, sport = SPORT) {
   };
 }
 
+export function rowsFromScoreboard(board, sport) {
+  const conf = SPORTS[sport];
+  return (board.events || [])
+    .map((e) => toGameRow(e, sport))
+    .filter((r) => r && r.season && r.week != null)
+    .filter((r) => r.season_type === 2 || r.season_type === 3) // regular season + playoffs only
+    .filter((r) => !(conf.skip && conf.skip(r.season_type, r.week)));
+}
+
 // ---------------------------------------------------------------------------
 // Playoff seeds from ESPN standings
 // ---------------------------------------------------------------------------
-
-async function getStandings(season) {
-  const url = new URL(`https://site.api.espn.com/apis/v2/sports/${cfg.path}/standings`);
-  if (season) url.searchParams.set('season', season);
-  const res = await fetch(url, { headers: { 'User-Agent': 'pick-six-sync' } });
-  if (!res.ok) throw new Error(`ESPN standings ${res.status}`);
-  return res.json();
-}
 
 const stat = (entry, ...names) => {
   for (const n of names) {
@@ -115,10 +165,11 @@ const stat = (entry, ...names) => {
   return null;
 };
 
-function conferenceOf(group) {
-  const text = `${group.abbreviation || ''} ${group.name || ''}`.toUpperCase();
-  if (text.includes('AFC') || text.includes('AMERICAN')) return 'AFC';
-  if (text.includes('NFC') || text.includes('NATIONAL FOOTBALL CONF')) return 'NFC';
+function conferenceOf(group, sport) {
+  const text = ` ${group.abbreviation || ''} ${group.name || ''} `.toUpperCase();
+  for (const [key, words] of SPORTS[sport].conferences) {
+    if (words.some((w) => text.includes(w))) return key;
+  }
   return null;
 }
 
@@ -128,12 +179,13 @@ function entriesUnder(group) {
   return own.concat(...(group.children || []).map(entriesUnder));
 }
 
-// ESPN standings → rows for the playoff_seeds table (7 per conference).
-export function seedsFromStandings(data, season, sport = SPORT) {
-  const conf = SPORTS[sport];
+// ESPN standings → rows for the playoff_seeds table.
+export function seedsFromStandings(data, season, sport) {
+  const cfg = SPORTS[sport];
   const rows = [];
-  for (const group of data.children || []) {
-    const conference = conferenceOf(group);
+  const groups = (data.children || []).flatMap((g) => (conferenceOf(g, sport) ? [g] : (g.children || [])));
+  for (const group of groups) {
+    const conference = conferenceOf(group, sport);
     if (!conference) continue;
     const teams = entriesUnder(group).map((e) => ({
       abbr: e.team?.abbreviation,
@@ -142,16 +194,21 @@ export function seedsFromStandings(data, season, sport = SPORT) {
       seed: stat(e, 'playoffSeed'),
       wins: stat(e, 'wins') ?? 0,
       losses: stat(e, 'losses') ?? 0,
-      ties: stat(e, 'ties') ?? 0,
-      pct: stat(e, 'winPercent') ?? 0,
+      // NFL ties; NHL overtime losses go in the same column
+      ties: stat(e, 'ties', 'otLosses', 'overtimeLosses') ?? 0,
+      pct: stat(e, 'winPercent', 'pointsPercentage') ?? 0,
+      points: stat(e, 'points'),
     })).filter((t) => t.abbr);
 
-    let ranked = teams.filter((t) => t.seed && t.seed >= 1 && t.seed <= conf.playoffTeams)
+    let ranked = teams.filter((t) => t.seed && t.seed >= 1 && t.seed <= cfg.playoffTeams)
       .sort((a, b) => a.seed - b.seed);
-    if (ranked.length !== conf.playoffTeams) {
-      // No seed numbers in the feed: fall back to best records (rough projection).
-      console.warn(`${conference}: no playoffSeed in standings feed — ranking by win %`);
-      ranked = teams.sort((a, b) => b.pct - a.pct || b.wins - a.wins).slice(0, conf.playoffTeams)
+    const distinct = new Set(ranked.map((t) => t.seed)).size;
+    if (ranked.length !== cfg.playoffTeams || distinct !== cfg.playoffTeams) {
+      // No usable seed numbers in the feed: fall back to best records (rough projection).
+      console.warn(`${sport.toUpperCase()} ${conference}: no playoffSeed in standings feed — ranking by record`);
+      ranked = teams
+        .sort((a, b) => (b.points ?? 0) - (a.points ?? 0) || b.pct - a.pct || b.wins - a.wins)
+        .slice(0, cfg.playoffTeams)
         .map((t, i) => ({ ...t, seed: i + 1 }));
     }
     for (const t of ranked) {
@@ -164,16 +221,12 @@ export function seedsFromStandings(data, season, sport = SPORT) {
   return rows;
 }
 
-export function rowsFromScoreboard(board, sport = SPORT) {
-  const conf = SPORTS[sport];
-  return (board.events || [])
-    .map((e) => toGameRow(e, sport))
-    .filter((r) => r && r.season && r.season_type && r.week)
-    .filter((r) => !(conf.skip && conf.skip(r.season_type, r.week)));
-}
+// ---------------------------------------------------------------------------
+// Fetch plans
+// ---------------------------------------------------------------------------
 
-// Which (seasonType, week) pairs to fetch around the current one.
-function neighbours(seasonType, week) {
+// Which (seasonType, week) pairs to fetch around the current NFL week.
+function neighbours(cfg, seasonType, week) {
   const out = [];
   const last = cfg.weeks[seasonType];
   const prev = week > 1 ? [seasonType, week - 1]
@@ -186,41 +239,65 @@ function neighbours(seasonType, week) {
   return out.filter(([t, w]) => !(cfg.skip && cfg.skip(t, w)));
 }
 
-async function collectRows() {
-  if (FIXTURE) {
-    return { rows: rowsFromScoreboard(JSON.parse(await readFile(FIXTURE, 'utf8'))), season: null };
-  }
-
-  const current = await getScoreboard();
+async function collectWeekly(sport, current) {
+  const cfg = SPORTS[sport];
   const season = current.season?.year ?? current.leagues?.[0]?.season?.year;
-  const seasonType = current.season?.type ?? current.leagues?.[0]?.season?.type?.type;
+  const seasonType = Number(current.season?.type ?? current.leagues?.[0]?.season?.type?.type);
   const week = current.week?.number;
-  if (!season || !seasonType) throw new Error('Could not read current season from ESPN');
-
-  let targets;
+  let targets = [];
   if (ALL) {
-    targets = [];
     for (const [t, last] of Object.entries(cfg.weeks)) {
-      for (let w = 1; w <= last; w++) {
-        if (!(cfg.skip && cfg.skip(Number(t), w))) targets.push([Number(t), w]);
-      }
+      for (let w = 1; w <= last; w++) if (!(cfg.skip && cfg.skip(Number(t), w))) targets.push([Number(t), w]);
     }
-  } else if (week) {
-    targets = neighbours(Number(seasonType), week);
-  } else {
-    targets = []; // offseason: nothing scheduled
+  } else if (week && cfg.weeks[seasonType]) {
+    targets = neighbours(cfg, seasonType, week);
   }
-
-  console.log(`Season ${season}, type ${seasonType}, week ${week ?? '-'} → fetching ${targets.length} week(s)`);
+  console.log(`[${sport}] season ${season}, type ${seasonType}, week ${week ?? '-'} → ${targets.length} week(s)`);
   const rows = [];
   for (const [t, w] of targets) {
-    const board = await getScoreboard({ dates: season, seasontype: t, week: w });
-    rows.push(...rowsFromScoreboard(board));
+    rows.push(...rowsFromScoreboard(await getScoreboard(sport, { dates: season, seasontype: t, week: w }), sport));
   }
-  return { rows, season, seasonType: Number(seasonType) };
+  return { rows, season, seasonType };
 }
 
-async function saveRows(rows, table = 'games', conflict = 'id') {
+async function collectDaily(sport, current) {
+  const league = current.leagues?.[0] || {};
+  const season = league.season?.year ?? current.season?.year;
+  const seasonType = Number(league.season?.type?.type ?? current.season?.type);
+  const today = new Date();
+  let start; let end;
+  if (ALL && league.calendarStartDate && league.calendarEndDate) {
+    start = new Date(league.calendarStartDate);
+    end = new Date(league.calendarEndDate);
+  } else {
+    start = addDays(today, -2); // late finals + stat corrections
+    end = addDays(today, 7);    // a week of upcoming slates
+  }
+  const rows = [];
+  let chunks = 0;
+  for (let from = start; from <= end; from = addDays(from, 21)) {
+    const to = addDays(from, 20) < end ? addDays(from, 20) : end;
+    const board = await getScoreboard(sport, { dates: `${ymdCompact(from)}-${ymdCompact(to)}`, limit: 1000 });
+    rows.push(...rowsFromScoreboard(board, sport));
+    chunks++;
+  }
+  console.log(`[${sport}] season ${season}, type ${seasonType}, ${ymdCompact(start)}–${ymdCompact(end)} (${chunks} request${chunks === 1 ? '' : 's'})`);
+  return { rows, season, seasonType };
+}
+
+async function collect(sport) {
+  if (FIXTURE) {
+    return { rows: rowsFromScoreboard(JSON.parse(await readFile(FIXTURE, 'utf8')), sport), season: null, seasonType: null };
+  }
+  const current = await getScoreboard(sport);
+  return SPORTS[sport].mode === 'daily' ? collectDaily(sport, current) : collectWeekly(sport, current);
+}
+
+// ---------------------------------------------------------------------------
+// Saving
+// ---------------------------------------------------------------------------
+
+function supabaseTarget() {
   // Forgive small copy-paste slips in the secrets: spaces, quotes, missing https://, trailing paths.
   const clean = (v) => (v || '').trim().replace(/^['"]|['"]$/g, '').trim();
   let url = clean(process.env.SUPABASE_URL);
@@ -247,7 +324,11 @@ async function saveRows(rows, table = 'games', conflict = 'id') {
     throw new Error(`SUPABASE_URL secret isn't a valid URL (${facts.join(', ')}). `
       + 'Re-enter it as https://<project-id>.supabase.co');
   }
+  return { url, key };
+}
 
+async function saveRows(rows, table = 'games', conflict = 'id') {
+  const { url, key } = supabaseTarget();
   const headers = {
     apikey: key,
     'Content-Type': 'application/json',
@@ -258,49 +339,72 @@ async function saveRows(rows, table = 'games', conflict = 'id') {
 
   for (let i = 0; i < rows.length; i += 200) {
     const chunk = rows.slice(i, i + 200);
-    const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${table}?on_conflict=${conflict}`, {
+    const res = await fetch(`${url}/rest/v1/${table}?on_conflict=${conflict}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(chunk),
     });
-    if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+    if (!res.ok) {
+      const text = await res.text();
+      if (/PGRST204|column/.test(text)) {
+        throw new Error(`Supabase ${res.status}: ${text}\n→ Your database is missing a newer column. Re-run supabase/schema.sql in the Supabase SQL Editor.`);
+      }
+      throw new Error(`Supabase ${res.status}: ${text}`);
+    }
   }
 }
 
-async function main() {
-  const { rows, season, seasonType } = await collectRows();
-  // De-duplicate (an event can appear in two fetched weeks around season boundaries)
+async function syncSport(sport) {
+  const cfg = SPORTS[sport];
+  const { rows, season, seasonType } = await collect(sport);
   const unique = [...new Map(rows.map((r) => [r.id, r])).values()];
-
   const finals = unique.filter((r) => r.winner).length;
   const live = unique.filter((r) => r.status === 'in').length;
-  console.log(`${unique.length} games (${finals} final, ${live} live)`);
+  console.log(`[${sport}] ${unique.length} games (${finals} final, ${live} live)`);
 
   // Playoff seeds: keep updating through the regular season; freeze once the playoffs start.
   let seeds = [];
-  const standingsFile = option('--standings-fixture');
-  if (standingsFile) {
-    seeds = seedsFromStandings(JSON.parse(await readFile(standingsFile, 'utf8')), 2026);
-  } else if (!FIXTURE && season && seasonType !== 3) {
+  if (STANDINGS_FIXTURE) {
+    seeds = seedsFromStandings(JSON.parse(await readFile(STANDINGS_FIXTURE, 'utf8')), 2026, sport);
+  } else if (!FIXTURE && season && seasonType === 2) {
     try {
-      seeds = seedsFromStandings(await getStandings(season), season);
+      const url = new URL(`https://site.api.espn.com/apis/v2/sports/${cfg.path}/standings`);
+      url.searchParams.set('season', season);
+      seeds = seedsFromStandings(await espn(url), season, sport);
     } catch (err) {
-      console.warn(`Skipping seeds: ${err.message}`);
+      console.warn(`[${sport}] skipping seeds: ${err.message}`);
     }
   }
-  if (seeds.length) console.log(`${seeds.length} playoff seeds`);
+  const fullField = seeds.length === cfg.playoffTeams * 2;
+  if (seeds.length) console.log(`[${sport}] ${seeds.length} playoff seeds${fullField ? '' : ' (incomplete — not saved)'}`);
 
   if (DRY_RUN) {
-    for (const r of unique) {
+    for (const r of unique.slice(0, 40)) {
       const score = r.status === 'pre' ? r.start_time : `${r.away_score}-${r.home_score} ${r.status_detail ?? ''}`;
-      console.log(`  wk${r.week} ${r.away_abbr} @ ${r.home_abbr}  ${score}  winner=${r.winner ?? '-'}`);
+      console.log(`  ${r.slate} ${r.away_abbr} @ ${r.home_abbr}  ${score}  winner=${r.winner ?? '-'}`);
     }
+    if (unique.length > 40) console.log(`  … and ${unique.length - 40} more`);
     for (const s of seeds) console.log(`  ${s.conference} #${s.seed} ${s.team_abbr} (${s.wins}-${s.losses}${s.ties ? `-${s.ties}` : ''})`);
     return;
   }
-  await saveRows(unique);
-  if (seeds.length === 14) await saveRows(seeds, 'playoff_seeds', 'sport,season,conference,seed');
-  console.log('Saved.');
+  if (unique.length) await saveRows(unique);
+  if (fullField) await saveRows(seeds, 'playoff_seeds', 'sport,season,conference,seed');
+  console.log(`[${sport}] saved.`);
+}
+
+async function main() {
+  const sports = SPORT_ARG === 'all' ? Object.keys(SPORTS) : SPORT_ARG.split(',');
+  for (const s of sports) if (!SPORTS[s]) throw new Error(`Unknown sport "${s}". Options: ${Object.keys(SPORTS).join(', ')}, all`);
+  let failed = 0;
+  for (const sport of sports) {
+    try {
+      await syncSport(sport);
+    } catch (err) {
+      failed++;
+      console.error(`[${sport}] FAILED: ${err.message || err}`);
+    }
+  }
+  if (failed) process.exit(1);
 }
 
 // Only run when executed directly (lets tests import the helpers).

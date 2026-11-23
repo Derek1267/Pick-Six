@@ -237,17 +237,11 @@ label { display: grid; gap: .35rem; font-weight: 600; }
 .banner.locked { background: #f1eff5; border-color: var(--line); }
 .save-note { margin-left: .4rem; color: var(--field); font-weight: 600; }
 .bracket-controls { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
-.bracket-controls .btn[data-action="simulate"] { background: var(--purple); border-color: var(--purple); }
-.bracket-controls .btn[data-action="simulate"]:hover { background: #6a32cf; }
+.bracket-controls .btn.sim { background: var(--purple); border-color: var(--purple); }
+.bracket-controls .btn.sim:hover { background: #6a32cf; }
 
-.bracket { display: grid; gap: 1rem; margin-bottom: 1rem; }
-.conf-block, .sb-block { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: .9rem; box-shadow: var(--shadow); }
 .conf-name { font-size: 1.25rem; margin-bottom: .6rem; display: inline-block; padding: .1rem .55rem; border-radius: 6px; color: #fff; }
-.conf-name.afc { background: #4a2c7a; }
-.conf-name.nfc { background: var(--purple); }
-.conf-name.sb { background: linear-gradient(90deg, var(--ink), var(--purple)); }
 
-.bracket-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: .6rem; }
 .round-label { font: 700 .72rem var(--body); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: .4rem; }
 .round { display: flex; flex-direction: column; justify-content: space-around; gap: .5rem; }
 .bye { display: flex; align-items: center; gap: .35rem; padding: .35rem .5rem; border: 1px dashed var(--line); border-radius: 9px; font: 800 1rem var(--display); }
@@ -274,7 +268,6 @@ label { display: grid; gap: .35rem; font-weight: 600; }
 .seed { display: inline-grid; place-items: center; min-width: 1.15rem; font: 700 .72rem var(--body); color: var(--muted); }
 @keyframes pop { from { transform: scale(.96); } to { transform: scale(1); } }
 
-.sb-block .bm { max-width: 320px; }
 .champion { display: flex; align-items: center; gap: .6rem; margin-top: .8rem; min-height: 48px; }
 .champion.crowned { padding: .6rem .9rem; border-radius: 12px; background: linear-gradient(90deg, #fff6d6, #f3ecff); border: 1px solid #f2d779; }
 .trophy { font-size: 1.8rem; }
@@ -291,8 +284,6 @@ label { display: grid; gap: .35rem; font-weight: 600; }
 .odds td:last-child strong { position: relative; z-index: 1; }
 
 @media (max-width: 520px) {
-  .conf-block { padding: .7rem .5rem; }
-  .bracket-grid { column-gap: .35rem; }
   .bt { padding: .3rem .35rem; gap: .25rem; }
   .bt img { display: none; }
   .bt .prob { font-size: .68rem; }
@@ -302,3 +293,46 @@ label { display: grid; gap: .35rem; font-weight: 600; }
   /* keep the odds table readable on phones: Team · Super Bowl · Win it all */
   .odds th:nth-child(2), .odds td:nth-child(2), .odds th:nth-child(3), .odds td:nth-child(3) { display: none; }
 }
+
+/* ---------- multi-sport ---------- */
+.container.wide { max-width: 1240px; }
+.sport-tag { display: inline-block; padding: .05rem .45rem; margin-right: .2rem; border-radius: 6px; background: var(--purple-soft); color: var(--accent-ink); font: 700 .75rem var(--body); letter-spacing: .04em; }
+.sport-pick { display: flex; flex-wrap: wrap; gap: .4rem; border: 0; padding: 0; margin: 0; }
+.sport-pick legend { width: 100%; margin-bottom: .35rem; }
+.sport-option { display: block; position: relative; }
+.sport-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; pointer-events: none; }
+.sport-option span { display: inline-block; padding: .45rem .85rem; border: 2px solid var(--line); border-radius: 999px; font: 800 1rem var(--display); letter-spacing: .04em; cursor: pointer; }
+.sport-option input:checked + span { background: var(--purple); border-color: var(--purple); color: #fff; }
+.sport-option input:focus-visible + span { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- full bracket (final in the middle) ---------- */
+.mode-switch { display: inline-flex; gap: .25rem; padding: .25rem; margin-bottom: .8rem; background: #fff; border: 1px solid var(--line); border-radius: 999px; }
+.mode-switch button { padding: .45rem .95rem; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font: 700 .95rem var(--body); cursor: pointer; }
+.mode-switch button.active { background: var(--ink); color: #fff; }
+.mode-switch button:disabled { opacity: .45; cursor: not-allowed; }
+.banner.fun { background: #fff8e1; border-color: #f5d77a; }
+
+.bracket-scroll { overflow-x: auto; margin-bottom: 1rem; padding-bottom: .4rem; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.bracket-scroll:focus-visible { outline: 3px solid var(--purple); }
+.bracket-full {
+  display: grid; min-width: 1040px; padding: 1rem;
+  grid-template-columns: repeat(3, minmax(118px, 1fr)) minmax(170px, 1.25fr) repeat(3, minmax(118px, 1fr));
+  column-gap: .6rem; row-gap: .35rem;
+}
+.bf-conf { font: 800 1.3rem var(--display); text-transform: uppercase; letter-spacing: .03em; padding: .1rem .55rem; border-radius: 6px; color: #fff; justify-self: start; }
+.bf-conf.left { grid-column: 1 / 4; background: #4a2c7a; }
+.bf-conf.center { grid-column: 4; justify-self: center; background: linear-gradient(90deg, var(--ink), var(--purple)); }
+.bf-conf.right { grid-column: 5 / 8; justify-self: end; background: var(--purple); }
+.bracket-full .round-label { text-align: center; margin: .3rem 0 .2rem; }
+.bracket-full .round { min-height: 100%; }
+.final-col { justify-content: center !important; gap: .9rem; }
+.final-col .bm { border: 2px solid var(--purple); box-shadow: 0 0 0 4px var(--purple-soft); }
+.final-col .champion { flex-direction: column; text-align: center; gap: .2rem; margin: 0; padding: .7rem; }
+.final-col .champ-name { font-size: 1.25rem; line-height: 1.05; }
+.bo-tag { display: block; margin-top: .1rem; font-weight: 500; font-size: .62rem; letter-spacing: .04em; color: var(--muted); opacity: .85; }
+
+.field-editor .field-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin: .6rem 0 1rem; }
+.field-editor .conf-name { background: var(--ink); }
+.field-row { display: grid; grid-template-columns: 1.4rem 1fr; align-items: center; gap: .4rem; margin-bottom: .35rem; font-weight: 500; }
+.field-row select { padding: .45rem .55rem; font-size: .9rem; }
+@media (max-width: 600px) { .field-editor .field-cols { grid-template-columns: 1fr; } }
