@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pick Six — weekly pick'em with your friends</title>
+  <meta name="description" content="Make a private league, pick winners every week from the real NFL schedule, and climb the leaderboard.">
+  <meta name="theme-color" content="#1e1036">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%231e1036'/><text x='32' y='46' font-family='Arial Black,Arial' font-weight='900' font-size='38' text-anchor='middle' fill='%23f2b705'>6</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/" aria-label="Pick Six home">
+      <span class="brand-mark">6</span>
+      <span class="brand-name">Pick&nbsp;Six</span>
+    </a>
+    <nav id="account" class="account"></nav>
+  </header>
+
+  <main id="app" class="container">
+    <div class="loading">Loading…</div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <dialog id="name-dialog" class="dialog">
+    <form method="dialog" id="name-form">
+      <h2>Your display name</h2>
+      <p class="muted">This is what your league-mates see on the leaderboard.</p>
+      <input id="name-input" name="name" maxlength="30" required autocomplete="nickname">
+      <div class="row end">
+        <button type="button" class="btn ghost" id="name-cancel">Cancel</button>
+        <button type="submit" class="btn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
