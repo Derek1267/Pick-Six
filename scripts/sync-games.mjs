@@ -221,9 +221,16 @@ async function collectRows() {
 }
 
 async function saveRows(rows, table = 'games', conflict = 'id') {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
+  // Forgive small copy-paste slips in the secrets: spaces, quotes, missing https://, trailing paths.
+  const clean = (v) => (v || '').trim().replace(/^['"]|['"]$/g, '').trim();
+  let url = clean(process.env.SUPABASE_URL);
+  const key = clean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  if (!url || !key) throw new Error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY secrets');
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  url = url.replace(/\/(rest\/v1|dashboard).*$/i, '').replace(/\/+$/, '');
+  if (url.includes('supabase.com/dashboard')) {
+    throw new Error('SUPABASE_URL should look like https://<project-id>.supabase.co, not the dashboard link');
+  }
 
   const headers = {
     apikey: key,
