@@ -231,6 +231,22 @@ async function saveRows(rows, table = 'games', conflict = 'id') {
   if (url.includes('supabase.com/dashboard')) {
     throw new Error('SUPABASE_URL should look like https://<project-id>.supabase.co, not the dashboard link');
   }
+  try {
+    const u = new URL(url);
+    if (!u.hostname.endsWith('.supabase.co')) {
+      console.warn(`Note: SUPABASE_URL host doesn't end in .supabase.co (${u.hostname.length} chars) — double-check the secret`);
+    }
+  } catch {
+    // Describe the problem without printing the secret itself.
+    const facts = [
+      `${url.length} characters`,
+      /\s/.test(url) ? 'contains a space or line break' : 'no spaces',
+      url.includes('supabase.co') ? 'contains "supabase.co"' : 'does NOT contain "supabase.co"',
+      /[^\x20-\x7E]/.test(url) ? 'contains unusual/invisible characters' : 'plain characters only',
+    ];
+    throw new Error(`SUPABASE_URL secret isn't a valid URL (${facts.join(', ')}). `
+      + 'Re-enter it as https://<project-id>.supabase.co');
+  }
 
   const headers = {
     apikey: key,
