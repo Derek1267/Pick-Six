@@ -132,6 +132,8 @@ begin
     new.id,
     left(coalesce(
       nullif(trim(new.raw_user_meta_data ->> 'display_name'), ''),
+      -- Google sign-in: use the first name from the Google profile
+      nullif(split_part(trim(coalesce(new.raw_user_meta_data ->> 'full_name', new.raw_user_meta_data ->> 'name', '')), ' ', 1), ''),
       split_part(new.email, '@', 1),
       'Player'
     ), 30)
@@ -188,10 +190,8 @@ begin
   -- Default season: the one with upcoming games (else the latest loaded).
   v_season := coalesce(
     p_season,
-    (select season from games where sport = p_sport and start_time > now() - interval '2 days'
-       order by start_time limit 1),
-    (select max(season) from games where sport = p_sport
-       having max(start_time) > now() - interval '30 days')
+    (select season from games where sport = p_sport and start_time > now()
+       order by start_time limit 1)
   );
   if v_season is null then
     raise exception 'The % season hasn''t been loaded yet — check back when its schedule is out', upper(p_sport);
@@ -452,3 +452,18 @@ end $$;
 
 -- Ask the API to pick up new columns right away.
 notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- v4: league management (safe to run on an existing database)
+-- =====================================================================
+
+-- The owner can remove players (players can still remove themselves via "leave league").
+drop policy if exists "owner removes members" on public.league_members;
+create policy "owner removes members" on public.league_members
+  for delete to authenticated
+  using (exists (select 1 from public.leagues l where l.id = league_id and l.created_by = auth.uid()));
+
+-- The owner can delete the whole league (picks and brackets go with it).
+drop policy if exists "owner deletes league" on public.leagues;
+create policy "owner deletes league" on public.leagues
+  for delete to authenticated using (created_by = auth.uid());

@@ -131,6 +131,7 @@ function parseRoute() {
     return { name: 'league', id: parts[1], tab: params.get('tab') || 'picks', week: params.get('week') };
   }
   if (parts[0] === 'join' && parts[1]) return { name: 'join', code: parts[1].toUpperCase() };
+  if (parts[0] === 'how') return { name: 'how' };
   return { name: 'home' };
 }
 
@@ -153,6 +154,11 @@ async function render() {
 
   const route = parseRoute();
   if (route.name === 'join') localStorage.setItem(JOIN_KEY, route.code);
+  if (route.name === 'how') {
+    if (state.session && !state.profile) await loadProfile();
+    renderAccount();
+    return renderHow();
+  }
 
   if (!state.session) {
     renderAccount();
@@ -186,7 +192,7 @@ function renderSetupNeeded() {
     <section class="card narrow">
       <h1>Almost there</h1>
       <p>Open <code>config.js</code> and paste in your Supabase project URL and anon key.
-      The README walks through it step by step.</p>
+      docs/SETUP.md walks through it step by step.</p>
     </section>`;
 }
 
@@ -234,29 +240,51 @@ document.getElementById('name-form').addEventListener('submit', async (e) => {
 // Sign in (email magic link or 6-digit code)
 // ---------------------------------------------------------------------------
 
+const GOOGLE_G = `<svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>`;
+
 function renderSignIn(route) {
   const joining = route.name === 'join' || localStorage.getItem(JOIN_KEY);
-  if (state.pendingEmail) return renderCodeStep();
+  if (state.pendingEmail) return renderCheckEmail();
 
   app.innerHTML = `
     <section class="hero">
-      <p class="eyebrow">${joining ? "You've been invited to a league" : 'NFL pick’em for you and your friends'}</p>
+      <p class="eyebrow">${joining ? "You've been invited to a league" : 'Pick’em & brackets for you and your friends'}</p>
       <h1>Pick winners.<br>Talk trash.<br><span class="accent">Climb the board.</span></h1>
-      <p class="lede">Start a private league, pick every game on the real schedule, and let the leaderboard settle the arguments.</p>
+      <p class="lede">Start a private league for the NFL, NBA, NHL or MLB, pick games on the real schedule, and let the leaderboard settle the arguments.</p>
     </section>
     <section class="card narrow">
       <h2>${joining ? 'Sign in to join' : 'Get started'}</h2>
-      <form id="signin-form" class="stack">
-        <label><span>Display name <span class="muted">(new players)</span></span>
-          <input name="name" maxlength="30" placeholder="e.g. Derek" autocomplete="nickname">
-        </label>
-        <label>Email
-          <input name="email" type="email" required placeholder="you@example.com" autocomplete="email">
-        </label>
-        <button class="btn big" type="submit">Email me a sign-in link</button>
-        <p class="muted small">No password needed. We'll email you a link and a 6-digit code.</p>
-      </form>
+      <div class="stack">
+        <button class="btn big google" id="google-btn" type="button">${GOOGLE_G}<span>Continue with Google</span></button>
+        <details class="email-signin">
+          <summary>No Google account? Use email instead</summary>
+          <form id="signin-form" class="stack">
+            <label><span>Display name <span class="muted">(new players)</span></span>
+              <input name="name" maxlength="30" placeholder="e.g. Derek" autocomplete="nickname">
+            </label>
+            <label>Email
+              <input name="email" type="email" required placeholder="you@example.com" autocomplete="email">
+            </label>
+            <button class="btn secondary" type="submit">Email me a sign-in link</button>
+            <p class="muted small">No password needed. We'll email you a link. Open it on this device.</p>
+          </form>
+        </details>
+        <p class="muted small center"><a href="#/how">How Pick Six works</a></p>
+      </div>
     </section>`;
+
+  document.getElementById('google-btn').addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: location.origin + location.pathname },
+    });
+    if (error) {
+      e.currentTarget.disabled = false;
+      toast(/provider is not enabled/i.test(error.message)
+        ? 'Google sign-in isn’t switched on yet — use email for now.' : friendlyError(error), 'error');
+    }
+  });
 
   document.getElementById('signin-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -274,34 +302,88 @@ function renderSignIn(route) {
     });
     if (error) {
       btn.disabled = false; btn.textContent = 'Email me a sign-in link';
-      return toast(friendlyError(error), 'error');
+      return toast(/rate limit/i.test(error.message)
+        ? 'Too many sign-in emails right now — try Google sign-in, or wait a bit.' : friendlyError(error), 'error');
     }
     state.pendingEmail = email;
-    renderCodeStep();
+    renderCheckEmail();
   });
 }
 
-function renderCodeStep() {
+function renderCheckEmail() {
   app.innerHTML = `
     <section class="card narrow">
       <h2>Check your email</h2>
       <p>We sent a sign-in link to <strong>${esc(state.pendingEmail)}</strong>.
-      Tap the link, or type the 6-digit code here:</p>
-      <form id="code-form" class="stack">
-        <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,8}"
-               maxlength="8" placeholder="123456" class="code-input" required>
-        <button class="btn big" type="submit">Sign in</button>
-      </form>
-      <button class="link" id="restart">Use a different email</button>
+      Tap <strong>Sign in</strong> in that email on this device and you'll land back here, signed in.</p>
+      <p class="muted small">Nothing there after a minute? Check spam, or go back and use Google instead.</p>
+      <button class="link" id="restart">← Back</button>
     </section>`;
   document.getElementById('restart').onclick = () => { state.pendingEmail = null; render(); };
-  document.getElementById('code-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const token = new FormData(e.target).get('code').trim();
-    const { error } = await sb.auth.verifyOtp({ email: state.pendingEmail, token, type: 'email' });
-    if (error) return toast('That code didn’t work — check it or request a new one.', 'error');
-    state.pendingEmail = null; // onAuthStateChange re-renders
-  });
+}
+
+// ---------------------------------------------------------------------------
+// How it works
+// ---------------------------------------------------------------------------
+
+function renderHow() {
+  app.innerHTML = `
+    <article class="how">
+      <a href="#/" class="link small">← ${state.session ? 'Your leagues' : 'Back'}</a>
+      <h1>How Pick Six works</h1>
+
+      <section class="card">
+        <h2>Leagues</h2>
+        <ul>
+          <li>Start a private league for one sport (NFL, NBA, NHL or MLB) and share the invite link or 6-letter code.</li>
+          <li>Only people in your league can see it, its picks or its standings.</li>
+          <li>The league owner can rename it, remove players or delete it. Anyone can leave a league from <strong>Manage</strong>.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Making picks</h2>
+        <ul>
+          <li><strong>NFL</strong>: pick every game, week by week. <strong>NBA, NHL, MLB</strong>: pick day by day, because they play almost every night.</li>
+          <li>Tap a team to pick it. You can change your mind as often as you like until that game starts.</li>
+          <li><strong>Each game locks at its own start time.</strong> A Sunday game stays open even after Thursday's game locks.</li>
+          <li>Your league-mates' picks stay hidden until a game starts. After that, everyone's picks for it are shown.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Scoring &amp; standings</h2>
+        <ul>
+          <li>1 point for every correct pick. Ties and postponed games don't count either way.</li>
+          <li><strong>Standings</strong> rank by total correct picks, then win percentage.</li>
+          <li>Each week someone takes the <strong>weekly win</strong> (most correct that week, Monday to Sunday for daily sports). Ties share it.</li>
+          <li>Scores update about every 15 minutes during games.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Brackets</h2>
+        <ul>
+          <li>The <strong>Bracket</strong> tab shows the playoff picture with the final in the middle.</li>
+          <li>During the season the seeds are "if the season ended today" and your bracket is just for practice.
+            When the regular season ends, real brackets open. They lock when the first playoff game starts, and then everyone's are revealed.</li>
+          <li>Points per correct winner: 1 in round one, 2 in round two, 4 for the conference final, 8 for the final.</li>
+          <li><strong>Just for fun</strong> mode is always open: fill out any bracket, even with your own choice of teams. It never counts in the league.</li>
+          <li>🎲 <strong>Simulate</strong> plays out the bracket using team records and home advantage. <strong>Title odds</strong> come from thousands of simulated playoffs. It's a simple model, not a prediction you should bet on.</li>
+        </ul>
+        <p class="muted small">Formats: NFL 7 teams per conference (with a bye and re-seeding), NBA and NHL 8 teams with best-of-7 series
+          (the NHL's real division-based pairings are simplified), MLB 6 teams per league with byes for the top two.</p>
+      </section>
+
+      <section class="card">
+        <h2>Signing in</h2>
+        <ul>
+          <li>Use <strong>Continue with Google</strong>, or get a sign-in link by email. There's no password.</li>
+          <li>If Google sign-in won't open from a chat app (like Instagram or Messenger), open the link in Safari or Chrome instead.</li>
+          <li>Change your display name any time by tapping your name at the top.</li>
+        </ul>
+      </section>
+    </article>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -310,10 +392,15 @@ function renderCodeStep() {
 
 async function renderHome(stale) {
   app.innerHTML = '<div class="loading">Loading your leagues…</div>';
-  const { data: leagues, error } = await sb
-    .from('leagues')
-    .select('id, name, invite_code, season, sport, league_members(count)')
-    .order('created_at');
+  const nowIso = new Date().toISOString();
+  const [{ data: leagues, error }, ...upcoming] = await Promise.all([
+    sb.from('leagues').select('id, name, invite_code, season, sport, league_members(count)').order('created_at'),
+    // A sport can host new leagues only while it has games coming up.
+    ...Object.keys(SPORTS).map((sport) => sb.from('games').select('id').eq('sport', sport)
+      .gt('start_time', nowIso).limit(1)),
+  ]);
+  const inSeason = Object.fromEntries(Object.keys(SPORTS).map((sport, i) => [sport, (upcoming[i].data || []).length > 0]));
+  const firstOpen = Object.keys(SPORTS).find((sp) => inSeason[sp]);
   if (stale()) return;
   if (error) { app.innerHTML = `<p class="error">${esc(friendlyError(error))}</p>`; return; }
 
@@ -339,8 +426,10 @@ async function renderHome(stale) {
         <input name="name" maxlength="50" required placeholder="League name, e.g. Sunday Crew">
         <fieldset class="sport-pick">
           <legend class="muted small">Sport</legend>
-          ${Object.entries(SPORTS).map(([key, info], i) => `
-            <label class="sport-option"><input type="radio" name="sport" value="${key}" ${i === 0 ? 'checked' : ''}><span>${info.name}</span></label>`).join('')}
+          ${Object.entries(SPORTS).map(([key, info]) => `
+            <label class="sport-option ${inSeason[key] ? '' : 'off'}" title="${inSeason[key] ? '' : `${info.name} opens when its next season's schedule is out`}">
+              <input type="radio" name="sport" value="${key}" ${key === firstOpen ? 'checked' : ''} ${inSeason[key] ? '' : 'disabled'}>
+              <span>${info.name}${inSeason[key] ? '' : ' <small>off-season</small>'}</span></label>`).join('')}
         </fieldset>
         <button class="btn" type="submit">Create league</button>
       </form>
@@ -401,7 +490,10 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
       <a href="#/" class="link small">← All leagues</a>
       <div class="league-title-row">
         <h1>${esc(league.name)}</h1>
-        <button class="btn small secondary" id="invite-btn">Invite friends</button>
+        <div class="row">
+          <button class="btn small ghost" id="manage-btn">Manage</button>
+          <button class="btn small secondary" id="invite-btn">Invite friends</button>
+        </div>
       </div>
       <p class="muted small"><span class="sport-tag">${esc(sportInfo(league.sport).name)}</span> ${members.length} player${members.length === 1 ? '' : 's'}
         · code <strong class="mono">${esc(league.invite_code)}</strong></p>
@@ -429,6 +521,7 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
     return; // no auto-refresh here, so a simulation isn't wiped mid-look
   }
 
+  document.getElementById('manage-btn').onclick = () => openManage(league, members);
   document.getElementById('invite-btn').onclick = async () => {
     const link = inviteLink(league.invite_code);
     const text = `Join my Pick Six league "${league.name}": ${link}`;
@@ -692,6 +785,102 @@ async function standingsHtml(league, members) {
       <h2>Weekly winners</h2>
       <ul class="weekly">${weeklyHtml}</ul>
     </section>`;
+}
+
+// ----- Manage league dialog -----
+
+function openManage(league, members) {
+  const dialog = document.getElementById('manage-dialog');
+  const me = state.session.user.id;
+  const isOwner = league.created_by === me;
+  const confirmTap = (btn, label) => {
+    // Two-tap confirm: first tap arms the button, second tap acts.
+    if (btn.dataset.armed) return true;
+    btn.dataset.armed = '1';
+    btn.textContent = label;
+    btn.classList.add('danger');
+    setTimeout(() => { delete btn.dataset.armed; }, 4000);
+    return false;
+  };
+
+  const draw = () => {
+    dialog.innerHTML = `
+      <div class="manage">
+        <div class="row between"><h2>Manage league</h2>
+          <button class="btn icon ghost" data-close aria-label="Close">×</button></div>
+        ${isOwner ? `
+          <form id="rename-form" class="stack">
+            <label>League name <input name="name" maxlength="50" required value="${esc(league.name)}"></label>
+            <button class="btn small" type="submit">Save name</button>
+          </form>` : ''}
+        <h3>Players (${members.length})</h3>
+        <ul class="member-list">
+          ${members.map((m) => `
+            <li><span>${esc(m.name)}${m.user_id === me ? ' <span class="muted small">(you)</span>' : ''}
+              ${m.role === 'owner' ? ' <span class="sport-tag">Owner</span>' : ''}</span>
+              ${isOwner && m.user_id !== me ? `<button class="btn small ghost" data-remove="${m.user_id}">Remove</button>` : ''}
+            </li>`).join('')}
+        </ul>
+        <div class="danger-zone">
+          ${isOwner
+            ? `<button class="btn small ghost" data-delete>Delete league</button>
+               <p class="muted small">Deleting removes the league, everyone's picks and brackets for good.</p>`
+            : `<button class="btn small ghost" data-leave>Leave league</button>
+               <p class="muted small">You can rejoin later with the invite code.</p>`}
+        </div>
+      </div>`;
+  };
+
+  dialog.onclick = async (e) => {
+    if (e.target === dialog || e.target.closest('[data-close]')) { dialog.close(); return; }
+    const remove = e.target.closest('[data-remove]');
+    if (remove) {
+      const who = members.find((m) => m.user_id === remove.dataset.remove);
+      if (!confirmTap(remove, `Remove ${who?.name ?? 'player'}?`)) return;
+      const { error } = await sb.from('league_members').delete()
+        .eq('league_id', league.id).eq('user_id', remove.dataset.remove);
+      if (error) return toast(friendlyError(error), 'error');
+      members.splice(members.indexOf(who), 1);
+      toast(`${who?.name ?? 'Player'} removed`, 'good');
+      draw();
+      return;
+    }
+    const leave = e.target.closest('[data-leave]');
+    if (leave) {
+      if (!confirmTap(leave, 'Tap again to leave')) return;
+      const { error } = await sb.from('league_members').delete().eq('league_id', league.id).eq('user_id', me);
+      if (error) return toast(friendlyError(error), 'error');
+      dialog.close();
+      toast(`You left ${league.name}`, 'good');
+      go('#/');
+      return;
+    }
+    const del = e.target.closest('[data-delete]');
+    if (del) {
+      if (!confirmTap(del, 'Tap again to delete for good')) return;
+      const { error } = await sb.from('leagues').delete().eq('id', league.id);
+      if (error) return toast(friendlyError(error), 'error');
+      dialog.close();
+      toast(`${league.name} deleted`, 'good');
+      go('#/');
+    }
+  };
+
+  dialog.onsubmit = async (e) => {
+    if (e.target.id !== 'rename-form') return;
+    e.preventDefault();
+    const name = new FormData(e.target).get('name').trim();
+    if (!name) return;
+    const { error } = await sb.from('leagues').update({ name }).eq('id', league.id);
+    if (error) return toast(friendlyError(error), 'error');
+    league.name = name;
+    toast('League renamed', 'good');
+    dialog.close();
+    render();
+  };
+
+  draw();
+  dialog.showModal();
 }
 
 // ----- Bracket tab -----
