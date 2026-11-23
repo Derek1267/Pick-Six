@@ -275,11 +275,24 @@ async function collectDaily(sport, current) {
   }
   const rows = [];
   let chunks = 0;
-  for (let from = start; from <= end; from = addDays(from, 21)) {
-    const to = addDays(from, 20) < end ? addDays(from, 20) : end;
-    const board = await getScoreboard(sport, { dates: `${ymdCompact(from)}-${ymdCompact(to)}`, limit: 1000 });
-    rows.push(...rowsFromScoreboard(board, sport));
-    chunks++;
+  // ESPN accepts short date ranges; if a range is refused, fall back to one day at a time.
+  for (let from = start; from <= end; from = addDays(from, 7)) {
+    const to = addDays(from, 6) < end ? addDays(from, 6) : end;
+    try {
+      rows.push(...rowsFromScoreboard(await getScoreboard(sport, { dates: `${ymdCompact(from)}-${ymdCompact(to)}` }), sport));
+      chunks++;
+    } catch (err) {
+      if (!/ESPN 4\d\d/.test(err.message)) throw err;
+      for (let d = from; d <= to; d = addDays(d, 1)) {
+        try {
+          rows.push(...rowsFromScoreboard(await getScoreboard(sport, { dates: ymdCompact(d) }), sport));
+        } catch (dayErr) {
+          if (!/ESPN 4\d\d/.test(dayErr.message)) throw dayErr;
+          console.warn(`[${sport}] ESPN refused ${ymdCompact(d)} — skipped`);
+        }
+        chunks++;
+      }
+    }
   }
   console.log(`[${sport}] season ${season}, type ${seasonType}, ${ymdCompact(start)}–${ymdCompact(end)} (${chunks} request${chunks === 1 ? '' : 's'})`);
   return { rows, season, seasonType };
