@@ -56,11 +56,7 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; lette
   background: var(--ink); color: #fff;
 }
 .brand { display: flex; align-items: center; gap: .55rem; text-decoration: none; }
-.brand-mark {
-  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px;
-  background: var(--accent); color: var(--ink);
-  font-family: var(--display); font-weight: 800; font-size: 1.5rem; transform: skew(-8deg);
-}
+.brand-mark { width: 36px; height: 36px; display: block; }
 .brand-name { font-family: var(--display); font-weight: 800; font-size: 1.5rem; text-transform: uppercase; letter-spacing: .02em; }
 .account { display: flex; align-items: center; gap: .6rem; }
 .account .chip { background: rgba(255,255,255,.12); color: #fff; border: 0; }
