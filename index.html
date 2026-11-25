@@ -12,6 +12,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+  <script>
+    // Apply a saved light/dark choice before the page paints (no flash). No choice = follow the device.
+    try { const t = localStorage.getItem('pickSix.theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -19,7 +23,10 @@
       <img class="brand-mark" src="logo.svg" alt="" width="36" height="36">
       <span class="brand-name">Pick&nbsp;Six</span>
     </a>
-    <nav id="account" class="account"></nav>
+    <div class="topbar-right">
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Light / dark mode"></button>
+      <nav id="account" class="account"></nav>
+    </div>
   </header>
 
   <main id="app" class="container">

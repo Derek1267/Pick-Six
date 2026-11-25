@@ -29,6 +29,7 @@
 - **🎲 Simulator and title odds.** Play out the bracket in one tap, or see each team's chances from thousands of simulated playoffs.
 - **Just-for-fun mode.** Build any bracket you like, even with your own choice of teams, without it counting.
 - **Easy sign-in.** Continue with Google, or use an email link. No passwords.
+- **Light and dark mode.** Follows your device, or flip it with the ☀/☾ button.
 
 ## How it's built
 
@@ -52,11 +53,6 @@ A small, free-to-run stack with no build step:
 ├── .github/workflows/    runs the sync on a schedule
 └── docs/SETUP.md         how to run your own copy
 ```
-
-## Run your own copy
-
-It's free to host: Supabase's free tier, GitHub Pages and GitHub Actions on a public repo. Setup takes about 30 minutes.
-**→ [docs/SETUP.md](docs/SETUP.md)**
 
 ## Ideas on the roadmap
 
