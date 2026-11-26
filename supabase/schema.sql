@@ -585,3 +585,22 @@ grant execute on function public.is_league_owner(uuid) to authenticated;
 grant execute on function public.award_is_open(uuid, text) to authenticated;
 
 notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- v5.1: tighten function permissions (Supabase security advisor)
+-- =====================================================================
+
+-- Helper functions are only used inside security rules for signed-in users.
+revoke all on function public.is_league_member(uuid)            from public, anon;
+revoke all on function public.is_league_owner(uuid)             from public, anon;
+revoke all on function public.game_is_open(text)                from public, anon;
+revoke all on function public.game_has_started(text)            from public, anon;
+revoke all on function public.game_fits_league(text, uuid)      from public, anon;
+revoke all on function public.bracket_state(uuid)               from public, anon;
+revoke all on function public.award_is_open(uuid, text)         from public, anon;
+grant execute on function public.is_league_member(uuid), public.is_league_owner(uuid),
+  public.game_is_open(text), public.game_has_started(text), public.game_fits_league(text, uuid),
+  public.bracket_state(uuid), public.award_is_open(uuid, text) to authenticated;
+-- The sign-up trigger runs on its own; nobody needs to call it directly.
+revoke all on function public.handle_new_user() from public, anon, authenticated;
+alter function public.touch_updated_at() set search_path = public;
