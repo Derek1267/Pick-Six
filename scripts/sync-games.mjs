@@ -229,9 +229,15 @@ export function teamsFromStandings(data, sport) {
   for (const group of groups) {
     const conference = conferenceOf(group, sport);
     if (!conference) continue;
+    // Remember each team's division when the feed nests divisions under conferences.
+    const divisionOf = new Map();
+    for (const div of group.children || []) {
+      for (const e of entriesUnder(div)) if (e.team?.abbreviation) divisionOf.set(e.team.abbreviation, div.name || null);
+    }
     for (const e of entriesUnder(group)) {
       if (!e.team?.abbreviation) continue;
       rows.push({
+        division: divisionOf.get(e.team.abbreviation) || null,
         sport, abbr: e.team.abbreviation, name: e.team.displayName || e.team.name || e.team.abbreviation,
         logo: e.team.logos?.[0]?.href || e.team.logo || null, conference,
         wins: stat(e, 'wins') ?? 0, losses: stat(e, 'losses') ?? 0, ties: stat(e, 'ties', 'otLosses', 'overtimeLosses') ?? 0,

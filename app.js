@@ -9,6 +9,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 import * as BR from './bracket.js';
+import * as SEL from './selections.js';
 
 const app = document.getElementById('app');
 const accountNav = document.getElementById('account');
@@ -85,6 +86,49 @@ function dayLabel(ymd) {
   if (ymd === today) return `Today · ${base}`;
   if (ymd === tomorrow) return `Tomorrow · ${base}`;
   return base;
+}
+
+// ----- In-memory caches: switching tabs or weeks shouldn't re-download a whole season -----
+const cache = { leagues: new Map(), games: new Map() };
+const LEAGUE_TTL = 60e3;       // league name + members
+const GAMES_TTL = 10 * 60e3;   // full season schedule (live games are refreshed separately)
+const fresh = (entry, ttl) => entry && Date.now() - entry.at < ttl;
+export const forgetLeague = (id) => cache.leagues.delete(id);
+
+async function getLeagueBundle(id) {
+  const hit = cache.leagues.get(id);
+  if (fresh(hit, LEAGUE_TTL)) return hit.data;
+  const { data: league, error } = await sb.from('leagues').select('*').eq('id', id).maybeSingle();
+  if (error || !league) return null;
+  const { data } = await sb.from('league_members').select('user_id, role, profiles(display_name)').eq('league_id', id);
+  const members = (data || []).map((m) => ({ user_id: m.user_id, role: m.role, name: m.profiles?.display_name || 'Player' }));
+  const bundle = { league, members };
+  cache.leagues.set(id, { at: Date.now(), data: bundle });
+  return bundle;
+}
+
+async function getGames(sport, season) {
+  const key = `${sport}:${season}`;
+  const hit = cache.games.get(key);
+  if (fresh(hit, GAMES_TTL)) return hit.data;
+  const data = await loadGames(sport, season);
+  cache.games.set(key, { at: Date.now(), data });
+  return data;
+}
+
+// Only the games around right now can change between full reloads — fetch just those.
+async function refreshLiveGames(sport, season) {
+  const hit = cache.games.get(`${sport}:${season}`);
+  if (!hit) return getGames(sport, season);
+  const from = new Date(Date.now() - 12 * 36e5).toISOString();
+  const to = new Date(Date.now() + 2 * 36e5).toISOString();
+  const { data } = await sb.from('games').select('*').eq('sport', sport).eq('season', season)
+    .gte('start_time', from).lte('start_time', to);
+  if (data?.length) {
+    const byId = new Map(data.map((g) => [g.id, g]));
+    hit.data = hit.data.map((g) => byId.get(g.id) || g);
+  }
+  return hit.data;
 }
 
 // Supabase returns at most 1,000 rows per request — page through a season.
@@ -411,9 +455,10 @@ function renderHow() {
       <section class="card">
         <h2>Awards</h2>
         <ul>
-          <li>The <strong>Awards</strong> tab lets you call the season's winners: MVPs, rookies, top goalies, Cy Youngs, and who makes the All-Star Game or Pro Bowl.</li>
+          <li>The <strong>Awards</strong> tab lets you call the season's winners: MVPs, rookies, top goalies, Cy Youngs and more.</li>
+          <li>The <strong>All-Stars</strong> tab (<strong>Pro Bowl</strong> for NFL leagues) has whole teams to fill in: All-Star starters and reserves for both conferences, All-NBA, All-Defensive and All-Rookie teams, the Pro Bowl and All-Pro, NHL All-Star Teams, All-MLB and more.</li>
           <li>Search for a player, or type any name. Picks stay hidden until the league owner locks that award.</li>
-          <li>The owner enters the real winners when they're announced. One-player awards are worth 3 points, and each correct All-Star or Pro Bowl pick is worth 1.</li>
+          <li>The owner enters the real results when they're announced. Awards are worth 3 points, and each player you put on a team who really makes it is worth 1.</li>
         </ul>
       </section>
 
@@ -506,25 +551,27 @@ async function renderHome(stale) {
 // ---------------------------------------------------------------------------
 
 async function renderLeague(route, stale, { quiet = false } = {}) {
-  if (!quiet) app.innerHTML = '<div class="loading">Loading league…</div>';
+  const cached = fresh(cache.leagues.get(route.id), LEAGUE_TTL);
+  if (!quiet && !cached) app.innerHTML = '<div class="loading">Loading league…</div>';
 
-  const { data: league, error } = await sb.from('leagues').select('*').eq('id', route.id).maybeSingle();
+  const bundle = await getLeagueBundle(route.id);
   if (stale()) return;
-  if (error || !league) {
+  const league = bundle?.league;
+  if (!league) {
     app.innerHTML = `<section class="card narrow"><h2>League not found</h2>
       <p>You may not be a member yet — ask for an invite link.</p><a class="btn" href="#/">Back to your leagues</a></section>`;
     return;
   }
 
-  const [membersRes, gamesRes] = await Promise.all([
-    sb.from('league_members').select('user_id, role, profiles(display_name)').eq('league_id', league.id),
-    loadGames(league.sport, league.season).then((data) => ({ data }), (error) => ({ data: [], error })),
-  ]);
+  const members = bundle.members.map((m) => ({ ...m }));
+  const needsGames = route.tab === 'picks' || route.tab === 'bracket';
+  let games = [];
+  if (needsGames) {
+    try {
+      games = quiet ? await refreshLiveGames(league.sport, league.season) : await getGames(league.sport, league.season);
+    } catch { games = []; }
+  }
   if (stale()) return;
-  const members = (membersRes.data || []).map((m) => ({
-    user_id: m.user_id, role: m.role, name: m.profiles?.display_name || 'Player',
-  }));
-  const games = gamesRes.data || [];
   app.classList.toggle('wide', route.tab === 'bracket');
 
   const head = `
@@ -544,13 +591,14 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
         <a role="tab" href="#/league/${league.id}?tab=standings" class="${route.tab === 'standings' ? 'active' : ''}">Standings</a>
         <a role="tab" href="#/league/${league.id}?tab=bracket" class="${route.tab === 'bracket' ? 'active' : ''}">Bracket</a>
         <a role="tab" href="#/league/${league.id}?tab=awards" class="${route.tab === 'awards' ? 'active' : ''}">Awards</a>
+        <a role="tab" href="#/league/${league.id}?tab=teams" class="${route.tab === 'teams' ? 'active' : ''}">${esc(SEL.TEAMS_TAB_NAME[league.sport] || 'All-Stars')}</a>
       </div>
     </section>`;
 
   let body;
   if (route.tab === 'standings') body = await standingsHtml(league, members, games);
   else if (route.tab === 'bracket') body = '<div id="bracket-root"><div class="loading">Loading bracket…</div></div>';
-  else if (route.tab === 'awards') body = '<div id="awards-root"><div class="loading">Loading awards…</div></div>';
+  else if (route.tab === 'awards' || route.tab === 'teams') body = '<div id="sheets-root"><div class="loading">Loading…</div></div>';
   else body = await picksHtml(league, members, games, route);
   if (stale()) return;
 
@@ -564,8 +612,10 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
     await mountBracket(league, members, games, stale);
     return; // no auto-refresh here, so a simulation isn't wiped mid-look
   }
-  if (route.tab === 'awards') {
-    await mountAwards(league, members, stale);
+  if (route.tab === 'awards' || route.tab === 'teams') {
+    await mountSheets(document.getElementById('sheets-root'), league, members, stale, route.tab === 'teams'
+      ? { kind: 'teams', sheets: SEL.TEAMS[league.sport] || [] }
+      : { kind: 'awards', sheets: SEL.AWARDS[league.sport] || [] });
     return;
   }
 
@@ -894,6 +944,7 @@ function openManage(league, members) {
       const { data: still } = await sb.from('league_members').select('user_id')
         .eq('league_id', league.id).eq('user_id', remove.dataset.remove);
       if (still?.length) return toast(NOT_ALLOWED, 'error');
+      forgetLeague(league.id);
       members.splice(members.indexOf(who), 1);
       toast(`${who?.name ?? 'Player'} removed`, 'good');
       draw();
@@ -906,6 +957,7 @@ function openManage(league, members) {
       if (error) return toast(friendlyError(error), 'error');
       const { data: still } = await sb.from('league_members').select('user_id').eq('league_id', league.id).eq('user_id', me);
       if (still?.length) return toast(NOT_ALLOWED, 'error');
+      forgetLeague(league.id);
       dialog.close();
       toast(`You left ${league.name}`, 'good');
       go('#/');
@@ -918,6 +970,7 @@ function openManage(league, members) {
       if (error) return toast(friendlyError(error), 'error');
       const { data: still } = await sb.from('leagues').select('id').eq('id', league.id);
       if (still?.length) return toast(NOT_ALLOWED, 'error');
+      forgetLeague(league.id);
       dialog.close();
       toast(`${league.name} deleted`, 'good');
       go('#/');
@@ -931,6 +984,7 @@ function openManage(league, members) {
     if (!name) return;
     const { error } = await sb.from('leagues').update({ name }).eq('id', league.id);
     if (error) return toast(friendlyError(error), 'error');
+    forgetLeague(league.id);
     league.name = name;
     toast('League renamed', 'good');
     dialog.close();
@@ -941,269 +995,335 @@ function openManage(league, members) {
   dialog.showModal();
 }
 
-// ----- Awards tab -----
+// ----- Awards & All-Stars tabs (shared "pick sheet" engine) -----
 
-// Award questions per sport. count = how many players you pick. One-player awards are worth
-// 3 points; for multi-pick questions (All-Stars, Pro Bowl) each correct player is worth 1.
-const AWARDS = {
-  nfl: [
-    { id: 'mvp', title: 'MVP', note: 'Most Valuable Player', count: 1 },
-    { id: 'opoy', title: 'Offensive Player of the Year', count: 1 },
-    { id: 'dpoy', title: 'Defensive Player of the Year', count: 1 },
-    { id: 'oroy', title: 'Offensive Rookie of the Year', count: 1 },
-    { id: 'droy', title: 'Defensive Rookie of the Year', count: 1 },
-    { id: 'cpoy', title: 'Comeback Player of the Year', count: 1 },
-    { id: 'sbmvp', title: 'Super Bowl MVP', count: 1 },
-    { id: 'probowl', title: 'Pro Bowl', note: 'Pick 5 players who make the Pro Bowl', count: 5 },
-  ],
-  nba: [
-    { id: 'mvp', title: 'MVP', note: 'Most Valuable Player', count: 1 },
-    { id: 'roy', title: 'Rookie of the Year', count: 1 },
-    { id: 'dpoy', title: 'Defensive Player of the Year', count: 1 },
-    { id: 'smoy', title: 'Sixth Man of the Year', count: 1 },
-    { id: 'mip', title: 'Most Improved Player', count: 1 },
-    { id: 'clutch', title: 'Clutch Player of the Year', count: 1 },
-    { id: 'fmvp', title: 'Finals MVP', count: 1 },
-    { id: 'allstar', title: 'All-Stars', note: 'Pick 5 players who make the All-Star Game', count: 5 },
-  ],
-  nhl: [
-    { id: 'hart', title: 'Hart Trophy', note: 'MVP', count: 1 },
-    { id: 'vezina', title: 'Vezina Trophy', note: 'Best goalie', count: 1 },
-    { id: 'norris', title: 'Norris Trophy', note: 'Best defenceman', count: 1 },
-    { id: 'calder', title: 'Calder Trophy', note: 'Rookie of the year', count: 1 },
-    { id: 'rocket', title: 'Rocket Richard Trophy', note: 'Most goals', count: 1 },
-    { id: 'connsmythe', title: 'Conn Smythe Trophy', note: 'Playoff MVP', count: 1 },
-    { id: 'allstar', title: 'All-Stars', note: 'Pick 5 players who make the All-Star Game', count: 5 },
-  ],
-  mlb: [
-    { id: 'almvp', title: 'AL MVP', count: 1 },
-    { id: 'nlmvp', title: 'NL MVP', count: 1 },
-    { id: 'alcy', title: 'AL Cy Young', count: 1 },
-    { id: 'nlcy', title: 'NL Cy Young', count: 1 },
-    { id: 'alroy', title: 'AL Rookie of the Year', count: 1 },
-    { id: 'nlroy', title: 'NL Rookie of the Year', count: 1 },
-    { id: 'wsmvp', title: 'World Series MVP', count: 1 },
-    { id: 'allstar', title: 'All-Stars', note: 'Pick 5 players who make the All-Star Game', count: 5 },
-  ],
-};
-const awardPoints = (q) => (q.count === 1 ? 3 : 1);
+const playerCache = new Map(); // id → player, filled as needed (never the whole list)
+const teamsCache = new Map();  // sport → teams rows
 
-async function loadPlayers(sport) {
-  const all = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await sb.from('players').select('id, name, team_abbr, position, headshot')
-      .eq('sport', sport).order('name').range(from, from + 999);
-    if (error || !data) break;
-    all.push(...data);
-    if (data.length < 1000) break;
+async function fetchPlayers(ids) {
+  const missing = [...new Set(ids)].filter((id) => id && !id.startsWith('custom:') && !playerCache.has(id));
+  for (let i = 0; i < missing.length; i += 100) {
+    const { data } = await sb.from('players').select('id, name, team_abbr, position, headshot').in('id', missing.slice(i, i + 100));
+    for (const p of data || []) playerCache.set(p.id, p);
   }
-  return all;
 }
 
-// Points per player from the questions that have results.
-function scoreAwards(questions, picksByUser, settings) {
-  const totals = new Map();
-  for (const q of questions) {
-    const answers = new Set(settings.get(q.qid)?.answers || []);
-    if (!answers.size) continue;
-    for (const [userId, picks] of picksByUser) {
-      const mine = picks.get(q.qid) || [];
-      const hits = mine.filter((p) => answers.has(p)).length;
-      const t = totals.get(userId) || { points: 0, correct: 0 };
-      t.points += hits * awardPoints(q);
-      t.correct += hits;
-      totals.set(userId, t);
-    }
+async function getTeams(sport) {
+  if (!teamsCache.has(sport)) {
+    const { data } = await sb.from('teams').select('abbr, name, conference, division').eq('sport', sport);
+    teamsCache.set(sport, data || []);
   }
-  return totals;
+  return teamsCache.get(sport);
 }
 
-async function mountAwards(league, members, stale) {
-  const root = document.getElementById('awards-root');
+async function searchPlayers(sport, term, teamAbbrs) {
+  const safe = term.replace(/[%_,()]/g, ' ').trim();
+  if (!safe) return [];
+  let q = sb.from('players').select('id, name, team_abbr, position, headshot').eq('sport', sport)
+    .ilike('name', `%${safe}%`).order('name').limit(30);
+  if (teamAbbrs?.length) q = q.in('team_abbr', teamAbbrs);
+  const { data } = await q;
+  for (const p of data || []) playerCache.set(p.id, p);
+  return data || [];
+}
+
+const playerInfo = (id) => (id.startsWith('custom:')
+  ? { id, name: id.slice(7), team_abbr: '', position: '', headshot: null }
+  : playerCache.get(id) || { id, name: 'Unknown player', team_abbr: '', position: '' });
+
+function playerChip(id, { remove = null, correct = null } = {}) {
+  const p = playerInfo(id);
+  return `<span class="player-chip ${correct === true ? 'correct' : correct === false ? 'wrong' : ''}">
+    ${p.headshot ? `<img src="${esc(p.headshot)}" alt="" width="26" height="26" loading="lazy">` : `<span class="avatar">${esc(p.name.slice(0, 1))}</span>`}
+    <span><strong>${esc(p.name)}</strong>${p.team_abbr ? `<span class="muted small">${esc(p.team_abbr)}${p.position ? ` · ${esc(p.position)}` : ''}</span>` : ''}</span>
+    ${remove ? `<button class="chip-x" ${remove} aria-label="Remove ${esc(p.name)}">×</button>` : ''}
+  </span>`;
+}
+
+async function mountSheets(root, league, members, stale, { sheets: defs, kind }) {
   const me = state.session.user.id;
   const isOwner = league.created_by === me;
   const sport = league.sport;
-  const questions = (AWARDS[sport] || []).map((q) => ({ ...q, qid: `${sport}:${q.id}` }));
+  const prefix = kind === 'teams' ? `${sport}:team:` : `${sport}:`;
+  const sheets = defs.map((d) => ({ ...d, qid: `${prefix}${d.id}`, size: SEL.slotCount(d) }));
+  const qids = sheets.map((s) => s.qid);
 
-  const [players, picksRes, settingsRes] = await Promise.all([
-    loadPlayers(sport),
-    sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id),
-    sb.from('award_settings').select('question_id, locked_at, answers').eq('league_id', league.id),
+  const [picksRes, settingsRes, teams] = await Promise.all([
+    sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id).in('question_id', qids),
+    sb.from('award_settings').select('question_id, locked_at, answers').eq('league_id', league.id).in('question_id', qids),
+    getTeams(sport),
   ]);
   if (stale()) return;
-  if (picksRes.error?.code === '42P01' || settingsRes.error?.code === '42P01') {
-    root.innerHTML = `<div class="empty card"><p><strong>Awards need a database update.</strong> Re-run supabase/schema.sql.</p></div>`;
+  if (picksRes.error?.code === '42P01') {
+    root.innerHTML = '<div class="empty card"><p><strong>This needs a database update.</strong> Re-run supabase/schema.sql.</p></div>';
     return;
   }
 
-  const playerById = new Map(players.map((p) => [p.id, p]));
-  const picksByUser = new Map(); // user → (qid → [ids])
-  for (const row of picksRes.data || []) {
-    if (!picksByUser.has(row.user_id)) picksByUser.set(row.user_id, new Map());
-    picksByUser.get(row.user_id).set(row.question_id, row.players || []);
-  }
-  if (!picksByUser.has(me)) picksByUser.set(me, new Map());
+  const picksByUser = new Map([[me, new Map()]]);
+  const setRows = (rows) => {
+    for (const r of rows || []) {
+      if (!picksByUser.has(r.user_id)) picksByUser.set(r.user_id, new Map());
+      picksByUser.get(r.user_id).set(r.question_id, r.players || []);
+    }
+  };
+  setRows(picksRes.data);
   const settings = new Map((settingsRes.data || []).map((r) => [r.question_id, r]));
+  await fetchPlayers([
+    ...[...picksByUser.values()].flatMap((m) => [...m.values()].flat()),
+    ...[...settings.values()].flatMap((r) => r.answers || []),
+  ]);
+  if (stale()) return;
 
-  const isOpen = (q) => { const l = settings.get(q.qid)?.locked_at; return !l || new Date(l) > new Date(); };
-  const answersOf = (q) => settings.get(q.qid)?.answers || [];
-  const myPicks = (q) => picksByUser.get(me).get(q.qid) || [];
-  let resultsFor = null; // qid the owner is entering results for
-
-  const playerInfo = (id) => (id.startsWith('custom:')
-    ? { name: id.slice(7), team_abbr: '', position: '', headshot: null }
-    : playerById.get(id) || { name: 'Unknown player', team_abbr: '', position: '' });
-  const chip = (id, { removable = false, kind = 'pick', qid = '', correct = null } = {}) => {
-    const p = playerInfo(id);
-    return `<span class="player-chip ${correct === true ? 'correct' : correct === false ? 'wrong' : ''}">
-      ${p.headshot ? `<img src="${esc(p.headshot)}" alt="" width="26" height="26" loading="lazy">` : '<span class="avatar">' + esc(p.name.slice(0, 1)) + '</span>'}
-      <span><strong>${esc(p.name)}</strong>${p.team_abbr ? `<span class="muted small">${esc(p.team_abbr)}${p.position ? ` · ${esc(p.position)}` : ''}</span>` : ''}</span>
-      ${removable ? `<button class="chip-x" data-remove-${kind}="${esc(id)}" data-q="${qid}" aria-label="Remove ${esc(p.name)}">×</button>` : ''}
-    </span>`;
+  const pad = (arr, n) => Array.from({ length: n }, (_, i) => (arr || [])[i] || '');
+  const mine = (sheet) => pad(picksByUser.get(me).get(sheet.qid), sheet.size);
+  const answers = (sheet) => pad(settings.get(sheet.qid)?.answers, sheet.size);
+  const answerSet = (sheet) => new Set((settings.get(sheet.qid)?.answers || []).filter(Boolean));
+  const isOpen = (sheet) => { const l = settings.get(sheet.qid)?.locked_at; return !l || new Date(l) > new Date(); };
+  const teamsFor = (sheet) => {
+    const f = sheet.filter;
+    if (!f || !teams.length) return null;
+    const list = teams.filter((t) => (f.conference ? t.conference === f.conference : true)
+      && (f.division ? (t.division || '').toLowerCase().includes(f.division.toLowerCase()) : true));
+    return list.length ? list.map((t) => t.abbr) : null;
   };
-  const searchBox = (q, kind) => `
-    <div class="player-search">
-      <input type="search" data-search="${kind}" data-q="${q.qid}" placeholder="${players.length ? 'Search players…' : 'Type a player name…'}"
-             autocomplete="off" aria-label="Search players for ${esc(q.title)}">
-      <div class="search-results" role="listbox" id="results-${kind}-${q.qid.replace(':', '-')}"></div>
-    </div>`;
 
-  const save = async (q, list) => {
-    picksByUser.get(me).set(q.qid, list);
-    draw();
-    const res = list.length
-      ? await sb.from('award_picks').upsert({ league_id: league.id, user_id: me, question_id: q.qid, players: list },
+  let active = null;            // { qid, flat, mode: 'pick' | 'answer' }
+  let resultsFor = null;        // qid the owner is entering results for
+  const openSheets = new Set(kind === 'teams' ? [sheets[0]?.qid] : qids);
+  let searchTimer;
+
+  const save = async (sheet, arr) => {
+    picksByUser.get(me).set(sheet.qid, arr);
+    const any = arr.some(Boolean);
+    const res = any
+      ? await sb.from('award_picks').upsert({ league_id: league.id, user_id: me, question_id: sheet.qid, players: arr },
         { onConflict: 'league_id,user_id,question_id' })
-      : await sb.from('award_picks').delete().eq('league_id', league.id).eq('user_id', me).eq('question_id', q.qid);
-    if (res.error) { toast(friendlyError(res.error).replace('That game has already kicked off', 'This award is locked'), 'error'); }
+      : await sb.from('award_picks').delete().eq('league_id', league.id).eq('user_id', me).eq('question_id', sheet.qid);
+    if (res.error) toast(/row-level/i.test(res.error.message) ? 'This one is locked.' : friendlyError(res.error), 'error');
   };
-  const saveSettings = async (q, patch) => {
-    const cur = settings.get(q.qid) || { question_id: q.qid, locked_at: null, answers: null };
+  const saveSettings = async (sheet, patch) => {
+    const cur = settings.get(sheet.qid) || { question_id: sheet.qid, locked_at: null, answers: null };
     const next = { ...cur, ...patch };
     const { error } = await sb.from('award_settings').upsert({
-      league_id: league.id, question_id: q.qid, locked_at: next.locked_at, answers: next.answers, updated_at: new Date().toISOString(),
+      league_id: league.id, question_id: sheet.qid, locked_at: next.locked_at, answers: next.answers,
+      updated_at: new Date().toISOString(),
     }, { onConflict: 'league_id,question_id' });
-    if (error) return toast(friendlyError(error), 'error');
-    settings.set(q.qid, next);
-    // Locking reveals everyone's picks, so reload them.
-    if ('locked_at' in patch) {
-      const { data } = await sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id);
-      for (const row of data || []) {
-        if (!picksByUser.has(row.user_id)) picksByUser.set(row.user_id, new Map());
-        picksByUser.get(row.user_id).set(row.question_id, row.players || []);
-      }
+    if (error) { toast(friendlyError(error), 'error'); return; }
+    settings.set(sheet.qid, next);
+    if ('locked_at' in patch) { // locking reveals everyone's picks
+      const { data } = await sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id).in('question_id', qids);
+      setRows(data);
+      await fetchPlayers((data || []).flatMap((r) => r.players || []));
     }
-    draw();
   };
 
-  const card = (q) => {
-    const open = isOpen(q);
-    const answers = answersOf(q);
-    const mine = myPicks(q);
-    const status = answers.length ? '<span class="status-pill done">Results in</span>'
+  // Players already used on this sheet, or on sheets in the same group (All-NBA 1st/2nd/3rd…).
+  const usedIds = (sheet, mode) => {
+    const get = (s) => (mode === 'answer' ? answers(s) : mine(s));
+    const related = sheets.filter((s) => s.qid === sheet.qid || (sheet.group && s.group === sheet.group));
+    return new Set(related.flatMap(get).filter(Boolean));
+  };
+
+  const slotHtml = (sheet, flat, id, mode, editable, section) => {
+    const isActive = active && active.qid === sheet.qid && active.flat === flat && active.mode === mode;
+    if (id) {
+      const verdict = mode === 'pick' && answerSet(sheet).size ? answerSet(sheet).has(id) : null;
+      return `<div class="slot filled">${playerChip(id, {
+        remove: editable ? `data-clear="${flat}" data-mode="${mode}" data-q="${sheet.qid}"` : null, correct: verdict })}</div>`;
+    }
+    const label = section.pos?.length ? `Add ${section.pos[0]}` : 'Add player';
+    return editable
+      ? `<button class="slot empty ${isActive ? 'active' : ''}" data-open="${flat}" data-mode="${mode}" data-q="${sheet.qid}">+ ${esc(label)}</button>`
+      : '<div class="slot empty muted small">—</div>';
+  };
+
+  const searchHtml = (sheet) => `
+    <div class="player-search">
+      <input type="search" id="sheet-search" placeholder="Search ${esc(sportInfo(sport).name)} players${sheet.filter ? ` (${esc(sheet.filter.conference || sheet.filter.division)})` : ''}…"
+             autocomplete="off" aria-label="Search players">
+      <div class="search-results" role="listbox" id="sheet-results"></div>
+    </div>`;
+
+  const sectionsHtml = (sheet, values, mode, editable) => {
+    let flat = 0;
+    return sheet.sections.map((section) => {
+      const start = flat;
+      flat += section.n;
+      const slots = Array.from({ length: section.n }, (_, i) => slotHtml(sheet, start + i, values[start + i], mode, editable, section)).join('');
+      const showSearch = active && active.qid === sheet.qid && active.mode === mode && active.flat >= start && active.flat < flat;
+      return `
+        <div class="sheet-section">
+          ${sheet.size > 1 ? `<h4>${esc(section.label)} <span class="muted small">${section.n}</span></h4>` : ''}
+          <div class="slots">${slots}</div>
+          ${showSearch ? searchHtml(sheet) : ''}
+        </div>`;
+    }).join('');
+  };
+
+  const everyoneHtml = (sheet) => {
+    const set = answerSet(sheet);
+    return `<details class="everyone-wrap"><summary>Everyone's picks</summary><ul class="everyone">${members.map((m) => {
+      const list = (picksByUser.get(m.user_id)?.get(sheet.qid) || []).filter(Boolean);
+      const hits = list.filter((id) => set.has(id)).length;
+      return `<li><span class="who">${esc(m.name)}${set.size ? ` <span class="muted small">${hits}/${list.length}</span>` : ''}</span>
+        <span class="chips">${list.length ? list.map((id) => playerChip(id, { correct: set.size ? set.has(id) : null })).join('') : '<span class="muted small">no picks</span>'}</span></li>`;
+    }).join('')}</ul></details>`;
+  };
+
+  const sheetHtml = (sheet) => {
+    const open = isOpen(sheet);
+    const hasResults = answerSet(sheet).size > 0;
+    const values = mine(sheet);
+    const filled = values.filter(Boolean).length;
+    const status = hasResults ? '<span class="status-pill done">Results in</span>'
       : open ? '<span class="status-pill open">Open</span>' : '<span class="status-pill locked">🔒 Locked</span>';
-    const verdict = (id) => (answers.length ? answers.includes(id) : null);
-    const everyone = !open ? members.map((m) => {
-      const list = picksByUser.get(m.user_id)?.get(q.qid) || [];
-      return `<li><span class="who">${esc(m.name)}</span>
-        <span class="chips">${list.length ? list.map((id) => chip(id, { correct: verdict(id) })).join('') : '<span class="muted small">no pick</span>'}</span></li>`;
-    }).join('') : '';
+    const scoring = sheet.points === 3 ? 'Pick 1 · 3 pts' : `${sheet.size} spots · 1 pt each`;
+    const entering = resultsFor === sheet.qid;
+    const body = `
+      ${hasResults && !entering ? `<div class="answers"><span class="muted small">Real ${sheet.size > 1 ? 'team' : 'winner'}:</span>
+        ${answers(sheet).filter(Boolean).map((id) => playerChip(id)).join('')}</div>` : ''}
+      ${entering ? `<div class="results-entry"><p class="muted small">Fill in the real ${sheet.size > 1 ? 'team' : 'winner'}. Saving results locks this and scores it.</p>
+        ${sectionsHtml(sheet, answers(sheet), 'answer', true)}</div>`
+        : sectionsHtml(sheet, values, 'pick', open)}
+      ${!open ? everyoneHtml(sheet) : ''}
+      ${isOwner ? `<div class="owner-tools">
+        ${open ? `<button class="btn small ghost" data-lock="${sheet.qid}">🔒 Lock picks</button>`
+          : `<button class="btn small ghost" data-unlock="${sheet.qid}">Reopen picks</button>`}
+        <button class="btn small ghost" data-results="${sheet.qid}">${entering ? 'Done entering results' : hasResults ? 'Edit results' : 'Enter results'}</button>
+      </div>` : ''}`;
+    if (kind === 'teams') {
+      return `
+        <details class="card sheet ${hasResults ? 'has-results' : ''}" data-sheet="${sheet.qid}" ${openSheets.has(sheet.qid) ? 'open' : ''}>
+          <summary class="sheet-head">
+            <span><strong class="sheet-title">${esc(sheet.title)}</strong><span class="muted small">${filled}/${sheet.size} picked · ${scoring}</span></span>
+            ${status}
+          </summary>
+          <div class="sheet-body">${body}</div>
+        </details>`;
+    }
     return `
-      <article class="card award ${answers.length ? 'has-results' : ''}">
+      <article class="card award ${hasResults ? 'has-results' : ''}">
         <div class="award-head">
-          <div><h3>${esc(q.title)}</h3><p class="muted small">${esc(q.note || '')}${q.note ? ' · ' : ''}${q.count === 1 ? 'Pick 1 · 3 pts' : `Pick ${q.count} · 1 pt each`}</p></div>
+          <div><h3>${esc(sheet.title)}</h3><p class="muted small">${sheet.note ? `${esc(sheet.note)} · ` : ''}${scoring}</p></div>
           ${status}
         </div>
-        ${answers.length ? `<div class="answers"><span class="muted small">Winner${answers.length > 1 ? 's' : ''}:</span> ${answers.map((id) => chip(id, { removable: isOwner && resultsFor === q.qid, kind: 'answer', qid: q.qid })).join('')}</div>` : ''}
-        ${open ? `
-          <div class="my-picks">
-            <div class="chips">${mine.map((id) => chip(id, { removable: true, qid: q.qid })).join('') || '<span class="muted small">No pick yet</span>'}</div>
-            ${mine.length < q.count ? searchBox(q, 'pick') : ''}
-          </div>` : `
-          <ul class="everyone">${everyone}</ul>`}
-        ${isOwner ? `
-          <div class="owner-tools">
-            ${open ? `<button class="btn small ghost" data-lock="${q.qid}">🔒 Lock picks</button>`
-              : `<button class="btn small ghost" data-unlock="${q.qid}">Reopen picks</button>`}
-            <button class="btn small ghost" data-results="${q.qid}">${resultsFor === q.qid ? 'Done entering results' : answers.length ? 'Edit results' : 'Enter results'}</button>
-          </div>
-          ${resultsFor === q.qid ? `<div class="results-entry"><p class="muted small">Add the real winner${q.count > 1 ? 's' : ''}. This locks the question and scores it.</p>${searchBox(q, 'answer')}</div>` : ''}` : ''}
+        ${body}
       </article>`;
   };
 
   const leaderboard = () => {
-    const totals = scoreAwards(questions, picksByUser, settings);
+    const totals = SEL.scoreSheets(sheets, picksByUser, new Map([...settings].map(([k, v]) => [k, v.answers])));
     if (!totals.size) return '';
     const rows = members.map((m) => ({ m, t: totals.get(m.user_id) || { points: 0, correct: 0 } }))
       .sort((a, b) => b.t.points - a.t.points || a.m.name.localeCompare(b.m.name));
-    return `
-      <section class="card flush">
-        <table class="standings">
-          <thead><tr><th>Player</th><th class="num">Correct</th><th class="num">Award pts</th></tr></thead>
-          <tbody>${rows.map(({ m, t }) => `<tr class="${m.user_id === me ? 'me' : ''}"><td class="player">${esc(m.name)}</td>
-            <td class="num">${t.correct}</td><td class="num strong">${t.points}</td></tr>`).join('')}</tbody>
-        </table>
-      </section>`;
+    return `<section class="card flush"><table class="standings">
+      <thead><tr><th>Player</th><th class="num">Correct</th><th class="num">Points</th></tr></thead>
+      <tbody>${rows.map(({ m, t }) => `<tr class="${m.user_id === me ? 'me' : ''}"><td class="player">${esc(m.name)}</td>
+        <td class="num">${t.correct}</td><td class="num strong">${t.points}</td></tr>`).join('')}</tbody></table></section>`;
   };
 
   const draw = () => {
+    const intro = kind === 'teams'
+      ? `<strong>⭐ ${esc(SEL.TEAMS_TAB_NAME[sport])}.</strong> Fill in every spot on each team. 1 point for each player who really makes it.`
+      : '<strong>🏅 Awards.</strong> Call the season’s big winners. 3 points each.';
+    // group cards under headings (All-Star Game, All-NBA, …)
+    let lastHeading = null;
+    const cards = sheets.map((sheet) => {
+      const h = sheet.heading && sheet.heading !== lastHeading ? `<h2 class="sheet-group">${esc(sheet.heading)}</h2>` : '';
+      lastHeading = sheet.heading || lastHeading;
+      return h + sheetHtml(sheet);
+    }).join('');
     root.innerHTML = `
-      <div class="banner"><strong>🏅 Awards.</strong> Call the season's big winners. Your picks stay hidden until
-        ${isOwner ? 'you lock' : 'the league owner locks'} each award, then everyone's are shown.
-        ${isOwner ? 'As the owner, lock each award before it’s announced and enter the winners. The real results aren’t loaded automatically.' : ''}
-        ${players.length ? '' : '<br><span class="muted small">The player list loads with the daily sync; until then, type names in yourself.</span>'}</div>
+      <div class="banner">${intro} Picks stay hidden until ${isOwner ? 'you lock' : 'the league owner locks'} each one.
+        ${isOwner ? 'As owner, lock each before it’s announced, then enter the real results. They aren’t loaded automatically.' : ''}</div>
       ${leaderboard()}
-      <div class="awards">${questions.map(card).join('')}</div>`;
+      <div class="${kind === 'teams' ? 'sheets' : 'awards'}">${cards}</div>`;
+    const input = root.querySelector('#sheet-search');
+    if (input) input.focus({ preventScroll: true });
   };
 
-  const showResults = (input) => {
-    const box = input.parentElement.querySelector('.search-results');
-    const q = questions.find((x) => x.qid === input.dataset.q);
-    const kind = input.dataset.search;
-    const term = input.value.trim().toLowerCase();
-    if (!term) { box.innerHTML = ''; return; }
-    const taken = new Set(kind === 'answer' ? answersOf(q) : myPicks(q));
-    const matches = players.filter((p) => !taken.has(p.id) && p.name.toLowerCase().includes(term))
-      .sort((a, b) => (a.name.toLowerCase().startsWith(term) ? 0 : 1) - (b.name.toLowerCase().startsWith(term) ? 0 : 1))
-      .slice(0, 8);
-    const exact = players.some((p) => p.name.toLowerCase() === term);
-    box.innerHTML = matches.map((p) => `
-      <button class="result" role="option" data-add-${kind}="${esc(p.id)}" data-q="${q.qid}">
-        ${p.headshot ? `<img src="${esc(p.headshot)}" alt="" width="28" height="28" loading="lazy">` : '<span class="avatar">' + esc(p.name.slice(0, 1)) + '</span>'}
+  const runSearch = async (input) => {
+    const box = root.querySelector('#sheet-results');
+    const sheet = sheets.find((s) => s.qid === active?.qid);
+    if (!box || !sheet) return;
+    const term = input.value.trim();
+    if (term.length < 2) { box.innerHTML = ''; return; }
+    const section = SEL.sectionOf(sheet, active.flat);
+    const taken = usedIds(sheet, active.mode);
+    const found = (await searchPlayers(sport, term, teamsFor(sheet))).filter((p) => !taken.has(p.id));
+    if (input.value.trim() !== term) return; // a newer search is on its way
+    const lower = term.toLowerCase();
+    const fits = (p) => (section?.pos?.length ? section.pos.includes(p.position) : true);
+    found.sort((a, b) => (fits(b) - fits(a)) || (b.name.toLowerCase().startsWith(lower) - a.name.toLowerCase().startsWith(lower)));
+    const exact = found.some((p) => p.name.toLowerCase() === lower);
+    box.innerHTML = found.slice(0, 8).map((p) => `
+      <button class="result ${fits(p) ? '' : 'off-pos'}" role="option" data-choose="${esc(p.id)}">
+        ${p.headshot ? `<img src="${esc(p.headshot)}" alt="" width="28" height="28" loading="lazy">` : `<span class="avatar">${esc(p.name.slice(0, 1))}</span>`}
         <span><strong>${esc(p.name)}</strong> <span class="muted small">${esc(p.team_abbr || '')}${p.position ? ` · ${esc(p.position)}` : ''}</span></span>
       </button>`).join('')
-      + (!exact ? `<button class="result custom" role="option" data-add-${kind}="custom:${esc(input.value.trim())}" data-q="${q.qid}">
-          Use “${esc(input.value.trim())}”</button>` : '');
+      + (!exact ? `<button class="result custom" role="option" data-choose="custom:${esc(term)}">Use “${esc(term)}”</button>` : '');
   };
 
-  root.oninput = (e) => { if (e.target.matches('[data-search]')) showResults(e.target); };
+  root.oninput = (e) => {
+    if (e.target.id !== 'sheet-search') return;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => runSearch(e.target), 180);
+  };
+  root.onkeydown = (e) => {
+    if (e.key === 'Escape' && active) { active = null; draw(); }
+  };
+  root.ontoggle = null;
+  root.addEventListener('toggle', (e) => {
+    const d = e.target.closest?.('details[data-sheet]');
+    if (!d) return;
+    if (d.open) openSheets.add(d.dataset.sheet); else openSheets.delete(d.dataset.sheet);
+  }, true);
+
   root.onclick = async (e) => {
     const t = (sel) => e.target.closest(sel);
+    const sheetOf = (el) => sheets.find((s) => s.qid === el.dataset.q);
     let el;
-    const qOf = (node) => questions.find((x) => x.qid === node.dataset.q);
-    if ((el = t('[data-add-pick]'))) {
-      const q = qOf(el);
-      if (myPicks(q).length < q.count) await save(q, [...myPicks(q), el.dataset.addPick]);
-      root.querySelector(`[data-search="pick"][data-q="${q.qid}"]`)?.focus();
-    } else if ((el = t('[data-remove-pick]'))) {
-      const q = qOf(el);
-      await save(q, myPicks(q).filter((id) => id !== el.dataset.removePick));
-    } else if ((el = t('[data-add-answer]'))) {
-      const q = qOf(el);
-      const answers = [...answersOf(q), el.dataset.addAnswer].slice(0, q.count);
-      await saveSettings(q, { answers, locked_at: settings.get(q.qid)?.locked_at || new Date().toISOString() });
-      root.querySelector(`[data-search="answer"][data-q="${q.qid}"]`)?.focus();
-    } else if ((el = t('[data-remove-answer]'))) {
-      const q = qOf(el);
-      const answers = answersOf(q).filter((id) => id !== el.dataset.removeAnswer);
-      await saveSettings(q, { answers: answers.length ? answers : null });
+    if ((el = t('[data-open]'))) {
+      active = { qid: el.dataset.q, flat: Number(el.dataset.open), mode: el.dataset.mode };
+      draw();
+    } else if ((el = t('[data-choose]'))) {
+      const sheet = sheets.find((s) => s.qid === active.qid);
+      const id = el.dataset.choose;
+      if (active.mode === 'answer') {
+        const arr = answers(sheet); arr[active.flat] = id;
+        await saveSettings(sheet, { answers: arr, locked_at: settings.get(sheet.qid)?.locked_at || new Date().toISOString() });
+        const next = arr.findIndex((v, i) => !v && i > active.flat);
+        active = next >= 0 ? { ...active, flat: next } : null;
+      } else {
+        const arr = mine(sheet); arr[active.flat] = id;
+        // Move straight on to the next empty spot in this section.
+        const section = SEL.sectionOf(sheet, active.flat);
+        const next = arr.findIndex((v, i) => !v && i > active.flat && SEL.sectionOf(sheet, i) === section);
+        active = next >= 0 ? { ...active, flat: next } : null;
+        draw();
+        await save(sheet, arr);
+      }
+      draw();
+    } else if ((el = t('[data-clear]'))) {
+      const sheet = sheetOf(el);
+      const flat = Number(el.dataset.clear);
+      if (el.dataset.mode === 'answer') {
+        const arr = answers(sheet); arr[flat] = '';
+        await saveSettings(sheet, { answers: arr.some(Boolean) ? arr : null });
+      } else {
+        const arr = mine(sheet); arr[flat] = '';
+        await save(sheet, arr);
+      }
+      draw();
     } else if ((el = t('[data-lock]'))) {
-      await saveSettings(questions.find((x) => x.qid === el.dataset.lock), { locked_at: new Date().toISOString() });
+      await saveSettings(sheets.find((s) => s.qid === el.dataset.lock), { locked_at: new Date().toISOString() });
+      active = null; draw();
     } else if ((el = t('[data-unlock]'))) {
-      await saveSettings(questions.find((x) => x.qid === el.dataset.unlock), { locked_at: null });
+      await saveSettings(sheets.find((s) => s.qid === el.dataset.unlock), { locked_at: null });
+      draw();
     } else if ((el = t('[data-results]'))) {
       resultsFor = resultsFor === el.dataset.results ? null : el.dataset.results;
-      draw();
+      active = null; draw();
     }
   };
 
@@ -1211,6 +1331,8 @@ async function mountAwards(league, members, stale) {
 }
 
 // ----- Bracket tab -----
+
+const ODDS_MEMO = new Map(); // simulated title odds, per sport + field
 
 const pct = (x) => (x >= 0.995 ? '>99%' : x < 0.005 ? (x > 0 ? '<1%' : '—') : `${Math.round(x * 100)}%`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1304,7 +1426,6 @@ async function mountBracket(league, members, games, stale) {
   let busy = false;
   let saveTimer;
   let saveNote = '';
-  let oddsCache = { sig: '', rows: [] };
 
   const seeds = () => (mode === 'fun' ? funSeeds() : officialSeeds);
   const getPicks = () => (mode === 'fun' ? fun.picks : leaguePicks);
@@ -1340,11 +1461,22 @@ async function mountBracket(league, members, games, stale) {
     }, 500);
   };
 
+  // Title odds take a moment to simulate, so they're worked out after the bracket is on screen
+  // and remembered for the rest of the visit.
+  let oddsPending = false;
   const oddsRows = () => {
     const s = seeds();
-    const sig = JSON.stringify(F.conferences.map((c) => s[c].map((t) => t.abbr)));
-    if (oddsCache.sig !== sig) oddsCache = { sig, rows: BR.odds(sport, s, 6000) };
-    return oddsCache.rows;
+    const sig = `${sport}:${JSON.stringify(F.conferences.map((c) => s[c].map((t) => `${t.abbr}${t.wins}-${t.losses}`)))}`;
+    if (ODDS_MEMO.has(sig)) return ODDS_MEMO.get(sig);
+    if (!oddsPending) {
+      oddsPending = true;
+      setTimeout(() => {
+        ODDS_MEMO.set(sig, BR.odds(sport, s, 4000));
+        oddsPending = false;
+        if (!busy && document.body.contains(root)) draw();
+      }, 60);
+    }
+    return null;
   };
 
   // ----- rendering -----
@@ -1381,7 +1513,7 @@ async function mountBracket(league, members, games, stale) {
     const s = seeds();
     const b = BR.buildBracket(sport, s, getPicks());
     const champ = b.F.winner;
-    const champOdds = champ ? oddsRows().find((r) => r.team.abbr === champ.abbr)?.champ : null;
+    const champOdds = champ ? oddsRows()?.find((r) => r.team.abbr === champ.abbr)?.champ : null;
     const col = (cls, inner) => `<div class="round ${cls}">${inner}</div>`;
     return `
       <div class="bracket-scroll" tabindex="0" aria-label="Playoff bracket (scrolls sideways)">
@@ -1400,7 +1532,7 @@ async function mountBracket(league, members, games, stale) {
             <div class="champion ${champ ? 'crowned' : ''}">
               ${champ ? `<span class="trophy" aria-hidden="true">🏆</span>
                 <span class="champ-name">${esc(champ.team_name)}</span>
-                <span class="muted small">${pct(champOdds ?? 0)} title odds</span>`
+                ${champOdds != null ? `<span class="muted small">${pct(champOdds)} title odds</span>` : ''}`
                 : '<span class="muted small">Pick a champion</span>'}
             </div>`)}
           ${col('', matchup(b[c1].r3))}
@@ -1503,6 +1635,7 @@ async function mountBracket(league, members, games, stale) {
 
   const oddsHtml = () => {
     const rows = oddsRows();
+    if (!rows) return '<section class="card"><h2>Title odds</h2><p class="muted">Simulating playoffs…</p></section>';
     const top = rows[0]?.champ || 1;
     return `
       <section class="card">
@@ -1586,7 +1719,6 @@ async function mountBracket(league, members, games, stale) {
       fun.field[conf][idx] = abbr;
       fun.picks = BR.cleanPicks(sport, funSeeds(), fun.picks);
       lsSet(funKey, fun);
-      oddsCache = { sig: '', rows: [] };
       activeSlot = null;
       draw();
       return;

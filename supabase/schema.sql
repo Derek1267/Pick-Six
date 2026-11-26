@@ -604,3 +604,20 @@ grant execute on function public.is_league_member(uuid), public.is_league_owner(
 -- The sign-up trigger runs on its own; nobody needs to call it directly.
 revoke all on function public.handle_new_user() from public, anon, authenticated;
 alter function public.touch_updated_at() set search_path = public;
+
+-- =====================================================================
+-- v6: All-Stars tab (safe to run on an existing database)
+-- =====================================================================
+
+-- Whole teams (Pro Bowl rosters) need up to 44 spots; empty spots are stored as ''.
+alter table public.award_picks drop constraint if exists award_picks_players_check;
+do $$ begin
+  alter table public.award_picks add constraint award_picks_players_check check (cardinality(players) <= 60);
+exception when duplicate_object then null;
+end $$;
+
+-- Divisions (used for the NHL's division All-Star teams).
+alter table public.teams add column if not exists division text;
+create index if not exists players_team on public.players (sport, team_abbr);
+
+notify pgrst, 'reload schema';
