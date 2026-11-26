@@ -401,11 +401,20 @@ function renderHow() {
           <li>During the season the seeds are "if the season ended today" and your bracket is just for practice.
             When the regular season ends, real brackets open. They lock when the first playoff game starts, and then everyone's are revealed.</li>
           <li>Points per correct winner: 1 in round one, 2 in round two, 4 for the conference final, 8 for the final.</li>
-          <li><strong>Just for fun</strong> mode is always open: fill out any bracket, even with your own choice of teams. It never counts in the league.</li>
+          <li><strong>Build your own</strong> is always open: choose any playoff teams and seeds (within their real conferences), then fill it out or simulate it. It never counts in the league.</li>
           <li>🎲 <strong>Simulate</strong> plays out the bracket using team records and home advantage. <strong>Title odds</strong> come from thousands of simulated playoffs. It's a simple model, not a prediction you should bet on.</li>
         </ul>
         <p class="muted small">Formats: NFL 7 teams per conference (with a bye and re-seeding), NBA and NHL 8 teams with best-of-7 series
           (the NHL's real division-based pairings are simplified), MLB 6 teams per league with byes for the top two.</p>
+      </section>
+
+      <section class="card">
+        <h2>Awards</h2>
+        <ul>
+          <li>The <strong>Awards</strong> tab lets you call the season's winners: MVPs, rookies, top goalies, Cy Youngs, and who makes the All-Star Game or Pro Bowl.</li>
+          <li>Search for a player, or type any name. Picks stay hidden until the league owner locks that award.</li>
+          <li>The owner enters the real winners when they're announced. One-player awards are worth 3 points, and each correct All-Star or Pro Bowl pick is worth 1.</li>
+        </ul>
       </section>
 
       <section class="card">
@@ -534,12 +543,14 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
         <a role="tab" href="#/league/${league.id}" class="${route.tab === 'picks' ? 'active' : ''}">Picks</a>
         <a role="tab" href="#/league/${league.id}?tab=standings" class="${route.tab === 'standings' ? 'active' : ''}">Standings</a>
         <a role="tab" href="#/league/${league.id}?tab=bracket" class="${route.tab === 'bracket' ? 'active' : ''}">Bracket</a>
+        <a role="tab" href="#/league/${league.id}?tab=awards" class="${route.tab === 'awards' ? 'active' : ''}">Awards</a>
       </div>
     </section>`;
 
   let body;
   if (route.tab === 'standings') body = await standingsHtml(league, members, games);
   else if (route.tab === 'bracket') body = '<div id="bracket-root"><div class="loading">Loading bracket…</div></div>';
+  else if (route.tab === 'awards') body = '<div id="awards-root"><div class="loading">Loading awards…</div></div>';
   else body = await picksHtml(league, members, games, route);
   if (stale()) return;
 
@@ -552,6 +563,10 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
   if (route.tab === 'bracket') {
     await mountBracket(league, members, games, stale);
     return; // no auto-refresh here, so a simulation isn't wiped mid-look
+  }
+  if (route.tab === 'awards') {
+    await mountAwards(league, members, stale);
+    return;
   }
 
   document.getElementById('manage-btn').onclick = () => openManage(league, members);
@@ -822,6 +837,8 @@ async function standingsHtml(league, members) {
 
 // ----- Manage league dialog -----
 
+const NOT_ALLOWED = 'That didn\u2019t go through. The database may need its latest update (re-run supabase/schema.sql).';
+
 function openManage(league, members) {
   const dialog = document.getElementById('manage-dialog');
   const me = state.session.user.id;
@@ -873,6 +890,10 @@ function openManage(league, members) {
       const { error } = await sb.from('league_members').delete()
         .eq('league_id', league.id).eq('user_id', remove.dataset.remove);
       if (error) return toast(friendlyError(error), 'error');
+      // The database quietly skips deletes it doesn't allow, so check it really happened.
+      const { data: still } = await sb.from('league_members').select('user_id')
+        .eq('league_id', league.id).eq('user_id', remove.dataset.remove);
+      if (still?.length) return toast(NOT_ALLOWED, 'error');
       members.splice(members.indexOf(who), 1);
       toast(`${who?.name ?? 'Player'} removed`, 'good');
       draw();
@@ -883,6 +904,8 @@ function openManage(league, members) {
       if (!confirmTap(leave, 'Tap again to leave')) return;
       const { error } = await sb.from('league_members').delete().eq('league_id', league.id).eq('user_id', me);
       if (error) return toast(friendlyError(error), 'error');
+      const { data: still } = await sb.from('league_members').select('user_id').eq('league_id', league.id).eq('user_id', me);
+      if (still?.length) return toast(NOT_ALLOWED, 'error');
       dialog.close();
       toast(`You left ${league.name}`, 'good');
       go('#/');
@@ -893,6 +916,8 @@ function openManage(league, members) {
       if (!confirmTap(del, 'Tap again to delete for good')) return;
       const { error } = await sb.from('leagues').delete().eq('id', league.id);
       if (error) return toast(friendlyError(error), 'error');
+      const { data: still } = await sb.from('leagues').select('id').eq('id', league.id);
+      if (still?.length) return toast(NOT_ALLOWED, 'error');
       dialog.close();
       toast(`${league.name} deleted`, 'good');
       go('#/');
@@ -914,6 +939,275 @@ function openManage(league, members) {
 
   draw();
   dialog.showModal();
+}
+
+// ----- Awards tab -----
+
+// Award questions per sport. count = how many players you pick. One-player awards are worth
+// 3 points; for multi-pick questions (All-Stars, Pro Bowl) each correct player is worth 1.
+const AWARDS = {
+  nfl: [
+    { id: 'mvp', title: 'MVP', note: 'Most Valuable Player', count: 1 },
+    { id: 'opoy', title: 'Offensive Player of the Year', count: 1 },
+    { id: 'dpoy', title: 'Defensive Player of the Year', count: 1 },
+    { id: 'oroy', title: 'Offensive Rookie of the Year', count: 1 },
+    { id: 'droy', title: 'Defensive Rookie of the Year', count: 1 },
+    { id: 'cpoy', title: 'Comeback Player of the Year', count: 1 },
+    { id: 'sbmvp', title: 'Super Bowl MVP', count: 1 },
+    { id: 'probowl', title: 'Pro Bowl', note: 'Pick 5 players who make the Pro Bowl', count: 5 },
+  ],
+  nba: [
+    { id: 'mvp', title: 'MVP', note: 'Most Valuable Player', count: 1 },
+    { id: 'roy', title: 'Rookie of the Year', count: 1 },
+    { id: 'dpoy', title: 'Defensive Player of the Year', count: 1 },
+    { id: 'smoy', title: 'Sixth Man of the Year', count: 1 },
+    { id: 'mip', title: 'Most Improved Player', count: 1 },
+    { id: 'clutch', title: 'Clutch Player of the Year', count: 1 },
+    { id: 'fmvp', title: 'Finals MVP', count: 1 },
+    { id: 'allstar', title: 'All-Stars', note: 'Pick 5 players who make the All-Star Game', count: 5 },
+  ],
+  nhl: [
+    { id: 'hart', title: 'Hart Trophy', note: 'MVP', count: 1 },
+    { id: 'vezina', title: 'Vezina Trophy', note: 'Best goalie', count: 1 },
+    { id: 'norris', title: 'Norris Trophy', note: 'Best defenceman', count: 1 },
+    { id: 'calder', title: 'Calder Trophy', note: 'Rookie of the year', count: 1 },
+    { id: 'rocket', title: 'Rocket Richard Trophy', note: 'Most goals', count: 1 },
+    { id: 'connsmythe', title: 'Conn Smythe Trophy', note: 'Playoff MVP', count: 1 },
+    { id: 'allstar', title: 'All-Stars', note: 'Pick 5 players who make the All-Star Game', count: 5 },
+  ],
+  mlb: [
+    { id: 'almvp', title: 'AL MVP', count: 1 },
+    { id: 'nlmvp', title: 'NL MVP', count: 1 },
+    { id: 'alcy', title: 'AL Cy Young', count: 1 },
+    { id: 'nlcy', title: 'NL Cy Young', count: 1 },
+    { id: 'alroy', title: 'AL Rookie of the Year', count: 1 },
+    { id: 'nlroy', title: 'NL Rookie of the Year', count: 1 },
+    { id: 'wsmvp', title: 'World Series MVP', count: 1 },
+    { id: 'allstar', title: 'All-Stars', note: 'Pick 5 players who make the All-Star Game', count: 5 },
+  ],
+};
+const awardPoints = (q) => (q.count === 1 ? 3 : 1);
+
+async function loadPlayers(sport) {
+  const all = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('players').select('id, name, team_abbr, position, headshot')
+      .eq('sport', sport).order('name').range(from, from + 999);
+    if (error || !data) break;
+    all.push(...data);
+    if (data.length < 1000) break;
+  }
+  return all;
+}
+
+// Points per player from the questions that have results.
+function scoreAwards(questions, picksByUser, settings) {
+  const totals = new Map();
+  for (const q of questions) {
+    const answers = new Set(settings.get(q.qid)?.answers || []);
+    if (!answers.size) continue;
+    for (const [userId, picks] of picksByUser) {
+      const mine = picks.get(q.qid) || [];
+      const hits = mine.filter((p) => answers.has(p)).length;
+      const t = totals.get(userId) || { points: 0, correct: 0 };
+      t.points += hits * awardPoints(q);
+      t.correct += hits;
+      totals.set(userId, t);
+    }
+  }
+  return totals;
+}
+
+async function mountAwards(league, members, stale) {
+  const root = document.getElementById('awards-root');
+  const me = state.session.user.id;
+  const isOwner = league.created_by === me;
+  const sport = league.sport;
+  const questions = (AWARDS[sport] || []).map((q) => ({ ...q, qid: `${sport}:${q.id}` }));
+
+  const [players, picksRes, settingsRes] = await Promise.all([
+    loadPlayers(sport),
+    sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id),
+    sb.from('award_settings').select('question_id, locked_at, answers').eq('league_id', league.id),
+  ]);
+  if (stale()) return;
+  if (picksRes.error?.code === '42P01' || settingsRes.error?.code === '42P01') {
+    root.innerHTML = `<div class="empty card"><p><strong>Awards need a database update.</strong> Re-run supabase/schema.sql.</p></div>`;
+    return;
+  }
+
+  const playerById = new Map(players.map((p) => [p.id, p]));
+  const picksByUser = new Map(); // user → (qid → [ids])
+  for (const row of picksRes.data || []) {
+    if (!picksByUser.has(row.user_id)) picksByUser.set(row.user_id, new Map());
+    picksByUser.get(row.user_id).set(row.question_id, row.players || []);
+  }
+  if (!picksByUser.has(me)) picksByUser.set(me, new Map());
+  const settings = new Map((settingsRes.data || []).map((r) => [r.question_id, r]));
+
+  const isOpen = (q) => { const l = settings.get(q.qid)?.locked_at; return !l || new Date(l) > new Date(); };
+  const answersOf = (q) => settings.get(q.qid)?.answers || [];
+  const myPicks = (q) => picksByUser.get(me).get(q.qid) || [];
+  let resultsFor = null; // qid the owner is entering results for
+
+  const playerInfo = (id) => (id.startsWith('custom:')
+    ? { name: id.slice(7), team_abbr: '', position: '', headshot: null }
+    : playerById.get(id) || { name: 'Unknown player', team_abbr: '', position: '' });
+  const chip = (id, { removable = false, kind = 'pick', qid = '', correct = null } = {}) => {
+    const p = playerInfo(id);
+    return `<span class="player-chip ${correct === true ? 'correct' : correct === false ? 'wrong' : ''}">
+      ${p.headshot ? `<img src="${esc(p.headshot)}" alt="" width="26" height="26" loading="lazy">` : '<span class="avatar">' + esc(p.name.slice(0, 1)) + '</span>'}
+      <span><strong>${esc(p.name)}</strong>${p.team_abbr ? `<span class="muted small">${esc(p.team_abbr)}${p.position ? ` · ${esc(p.position)}` : ''}</span>` : ''}</span>
+      ${removable ? `<button class="chip-x" data-remove-${kind}="${esc(id)}" data-q="${qid}" aria-label="Remove ${esc(p.name)}">×</button>` : ''}
+    </span>`;
+  };
+  const searchBox = (q, kind) => `
+    <div class="player-search">
+      <input type="search" data-search="${kind}" data-q="${q.qid}" placeholder="${players.length ? 'Search players…' : 'Type a player name…'}"
+             autocomplete="off" aria-label="Search players for ${esc(q.title)}">
+      <div class="search-results" role="listbox" id="results-${kind}-${q.qid.replace(':', '-')}"></div>
+    </div>`;
+
+  const save = async (q, list) => {
+    picksByUser.get(me).set(q.qid, list);
+    draw();
+    const res = list.length
+      ? await sb.from('award_picks').upsert({ league_id: league.id, user_id: me, question_id: q.qid, players: list },
+        { onConflict: 'league_id,user_id,question_id' })
+      : await sb.from('award_picks').delete().eq('league_id', league.id).eq('user_id', me).eq('question_id', q.qid);
+    if (res.error) { toast(friendlyError(res.error).replace('That game has already kicked off', 'This award is locked'), 'error'); }
+  };
+  const saveSettings = async (q, patch) => {
+    const cur = settings.get(q.qid) || { question_id: q.qid, locked_at: null, answers: null };
+    const next = { ...cur, ...patch };
+    const { error } = await sb.from('award_settings').upsert({
+      league_id: league.id, question_id: q.qid, locked_at: next.locked_at, answers: next.answers, updated_at: new Date().toISOString(),
+    }, { onConflict: 'league_id,question_id' });
+    if (error) return toast(friendlyError(error), 'error');
+    settings.set(q.qid, next);
+    // Locking reveals everyone's picks, so reload them.
+    if ('locked_at' in patch) {
+      const { data } = await sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id);
+      for (const row of data || []) {
+        if (!picksByUser.has(row.user_id)) picksByUser.set(row.user_id, new Map());
+        picksByUser.get(row.user_id).set(row.question_id, row.players || []);
+      }
+    }
+    draw();
+  };
+
+  const card = (q) => {
+    const open = isOpen(q);
+    const answers = answersOf(q);
+    const mine = myPicks(q);
+    const status = answers.length ? '<span class="status-pill done">Results in</span>'
+      : open ? '<span class="status-pill open">Open</span>' : '<span class="status-pill locked">🔒 Locked</span>';
+    const verdict = (id) => (answers.length ? answers.includes(id) : null);
+    const everyone = !open ? members.map((m) => {
+      const list = picksByUser.get(m.user_id)?.get(q.qid) || [];
+      return `<li><span class="who">${esc(m.name)}</span>
+        <span class="chips">${list.length ? list.map((id) => chip(id, { correct: verdict(id) })).join('') : '<span class="muted small">no pick</span>'}</span></li>`;
+    }).join('') : '';
+    return `
+      <article class="card award ${answers.length ? 'has-results' : ''}">
+        <div class="award-head">
+          <div><h3>${esc(q.title)}</h3><p class="muted small">${esc(q.note || '')}${q.note ? ' · ' : ''}${q.count === 1 ? 'Pick 1 · 3 pts' : `Pick ${q.count} · 1 pt each`}</p></div>
+          ${status}
+        </div>
+        ${answers.length ? `<div class="answers"><span class="muted small">Winner${answers.length > 1 ? 's' : ''}:</span> ${answers.map((id) => chip(id, { removable: isOwner && resultsFor === q.qid, kind: 'answer', qid: q.qid })).join('')}</div>` : ''}
+        ${open ? `
+          <div class="my-picks">
+            <div class="chips">${mine.map((id) => chip(id, { removable: true, qid: q.qid })).join('') || '<span class="muted small">No pick yet</span>'}</div>
+            ${mine.length < q.count ? searchBox(q, 'pick') : ''}
+          </div>` : `
+          <ul class="everyone">${everyone}</ul>`}
+        ${isOwner ? `
+          <div class="owner-tools">
+            ${open ? `<button class="btn small ghost" data-lock="${q.qid}">🔒 Lock picks</button>`
+              : `<button class="btn small ghost" data-unlock="${q.qid}">Reopen picks</button>`}
+            <button class="btn small ghost" data-results="${q.qid}">${resultsFor === q.qid ? 'Done entering results' : answers.length ? 'Edit results' : 'Enter results'}</button>
+          </div>
+          ${resultsFor === q.qid ? `<div class="results-entry"><p class="muted small">Add the real winner${q.count > 1 ? 's' : ''}. This locks the question and scores it.</p>${searchBox(q, 'answer')}</div>` : ''}` : ''}
+      </article>`;
+  };
+
+  const leaderboard = () => {
+    const totals = scoreAwards(questions, picksByUser, settings);
+    if (!totals.size) return '';
+    const rows = members.map((m) => ({ m, t: totals.get(m.user_id) || { points: 0, correct: 0 } }))
+      .sort((a, b) => b.t.points - a.t.points || a.m.name.localeCompare(b.m.name));
+    return `
+      <section class="card flush">
+        <table class="standings">
+          <thead><tr><th>Player</th><th class="num">Correct</th><th class="num">Award pts</th></tr></thead>
+          <tbody>${rows.map(({ m, t }) => `<tr class="${m.user_id === me ? 'me' : ''}"><td class="player">${esc(m.name)}</td>
+            <td class="num">${t.correct}</td><td class="num strong">${t.points}</td></tr>`).join('')}</tbody>
+        </table>
+      </section>`;
+  };
+
+  const draw = () => {
+    root.innerHTML = `
+      <div class="banner"><strong>🏅 Awards.</strong> Call the season's big winners. Your picks stay hidden until
+        ${isOwner ? 'you lock' : 'the league owner locks'} each award, then everyone's are shown.
+        ${isOwner ? 'As the owner, lock each award before it’s announced and enter the winners. The real results aren’t loaded automatically.' : ''}
+        ${players.length ? '' : '<br><span class="muted small">The player list loads with the daily sync; until then, type names in yourself.</span>'}</div>
+      ${leaderboard()}
+      <div class="awards">${questions.map(card).join('')}</div>`;
+  };
+
+  const showResults = (input) => {
+    const box = input.parentElement.querySelector('.search-results');
+    const q = questions.find((x) => x.qid === input.dataset.q);
+    const kind = input.dataset.search;
+    const term = input.value.trim().toLowerCase();
+    if (!term) { box.innerHTML = ''; return; }
+    const taken = new Set(kind === 'answer' ? answersOf(q) : myPicks(q));
+    const matches = players.filter((p) => !taken.has(p.id) && p.name.toLowerCase().includes(term))
+      .sort((a, b) => (a.name.toLowerCase().startsWith(term) ? 0 : 1) - (b.name.toLowerCase().startsWith(term) ? 0 : 1))
+      .slice(0, 8);
+    const exact = players.some((p) => p.name.toLowerCase() === term);
+    box.innerHTML = matches.map((p) => `
+      <button class="result" role="option" data-add-${kind}="${esc(p.id)}" data-q="${q.qid}">
+        ${p.headshot ? `<img src="${esc(p.headshot)}" alt="" width="28" height="28" loading="lazy">` : '<span class="avatar">' + esc(p.name.slice(0, 1)) + '</span>'}
+        <span><strong>${esc(p.name)}</strong> <span class="muted small">${esc(p.team_abbr || '')}${p.position ? ` · ${esc(p.position)}` : ''}</span></span>
+      </button>`).join('')
+      + (!exact ? `<button class="result custom" role="option" data-add-${kind}="custom:${esc(input.value.trim())}" data-q="${q.qid}">
+          Use “${esc(input.value.trim())}”</button>` : '');
+  };
+
+  root.oninput = (e) => { if (e.target.matches('[data-search]')) showResults(e.target); };
+  root.onclick = async (e) => {
+    const t = (sel) => e.target.closest(sel);
+    let el;
+    const qOf = (node) => questions.find((x) => x.qid === node.dataset.q);
+    if ((el = t('[data-add-pick]'))) {
+      const q = qOf(el);
+      if (myPicks(q).length < q.count) await save(q, [...myPicks(q), el.dataset.addPick]);
+      root.querySelector(`[data-search="pick"][data-q="${q.qid}"]`)?.focus();
+    } else if ((el = t('[data-remove-pick]'))) {
+      const q = qOf(el);
+      await save(q, myPicks(q).filter((id) => id !== el.dataset.removePick));
+    } else if ((el = t('[data-add-answer]'))) {
+      const q = qOf(el);
+      const answers = [...answersOf(q), el.dataset.addAnswer].slice(0, q.count);
+      await saveSettings(q, { answers, locked_at: settings.get(q.qid)?.locked_at || new Date().toISOString() });
+      root.querySelector(`[data-search="answer"][data-q="${q.qid}"]`)?.focus();
+    } else if ((el = t('[data-remove-answer]'))) {
+      const q = qOf(el);
+      const answers = answersOf(q).filter((id) => id !== el.dataset.removeAnswer);
+      await saveSettings(q, { answers: answers.length ? answers : null });
+    } else if ((el = t('[data-lock]'))) {
+      await saveSettings(questions.find((x) => x.qid === el.dataset.lock), { locked_at: new Date().toISOString() });
+    } else if ((el = t('[data-unlock]'))) {
+      await saveSettings(questions.find((x) => x.qid === el.dataset.unlock), { locked_at: null });
+    } else if ((el = t('[data-results]'))) {
+      resultsFor = resultsFor === el.dataset.results ? null : el.dataset.results;
+      draw();
+    }
+  };
+
+  draw();
 }
 
 // ----- Bracket tab -----
@@ -953,24 +1247,29 @@ async function mountBracket(league, members, games, stale) {
   const [c0, c1] = F.conferences;
   const total = BR.totalGames(sport);
 
-  const [seedRes, stateRes, picksRes] = await Promise.all([
+  const [seedRes, stateRes, picksRes, teamsRes] = await Promise.all([
     sb.from('playoff_seeds').select('*').eq('sport', sport).eq('season', league.season),
     sb.rpc('bracket_state', { p_league: league.id }),
     sb.from('bracket_picks').select('user_id, picks').eq('league_id', league.id),
+    sb.from('teams').select('*').eq('sport', sport),
   ]);
   if (stale()) return;
 
   const officialSeeds = BR.seedsByConference(seedRes.data, sport);
   const haveSeeds = BR.isComplete(officialSeeds, sport);
-  // Team list for the just-for-fun field: everyone in the schedule, plus anyone in the seeds.
-  const allTeams = teamsFromGames(games);
+  // Teams for "Build your own": the teams table knows every team's conference.
+  const teamRows = (teamsRes.data || []).map((t) => ({ ...t, team_name: t.name }));
+  const allTeams = teamRows.length ? teamRows : teamsFromGames(games);
   for (const c of F.conferences) {
     for (const t of officialSeeds[c] || []) {
-      if (!allTeams.some((x) => x.abbr === t.abbr)) allTeams.push({ ...t });
+      if (!allTeams.some((x) => x.abbr === t.abbr)) allTeams.push({ ...t, conference: c });
     }
   }
-  allTeams.sort((a, b) => a.team_name.localeCompare(b.team_name));
   const teamByAbbr = new Map(allTeams.map((t) => [t.abbr, t]));
+  const knowsConferences = teamRows.length > 0;
+  // A conference's teams, best record first.
+  const confTeams = (c) => allTeams.filter((t) => !knowsConferences || t.conference === c)
+    .sort((a, b) => BR.strength(b) - BR.strength(a) || a.team_name.localeCompare(b.team_name));
   const bstate = stateRes.data || 'not_ready'; // not_ready | open | locked
   const brackets = picksRes.data || [];
 
@@ -985,16 +1284,23 @@ async function mountBracket(league, members, games, stale) {
   const funKey = `pickSix.funBracket.${sport}`;
   const defaultField = () => {
     if (haveSeeds) return Object.fromEntries(F.conferences.map((c) => [c, officialSeeds[c].map((t) => t.abbr)]));
+    if (knowsConferences) return Object.fromEntries(F.conferences.map((c) => [c, confTeams(c).slice(0, F.teams).map((t) => t.abbr)]));
     const best = [...allTeams].sort((a, b) => BR.strength(b) - BR.strength(a)).slice(0, F.teams * 2);
     return Object.fromEntries(F.conferences.map((c, ci) => [c, best.filter((_, i) => i % 2 === ci).map((t) => t.abbr)]));
   };
-  const fun = lsGet(funKey, null) || { field: defaultField(), picks: {} };
+  let fun = lsGet(funKey, null) || { field: defaultField(), picks: {} };
+  // Throw away a saved field with teams in the wrong conference (older versions allowed that).
+  if (knowsConferences && F.conferences.some((c) => (fun.field?.[c] || []).length !== F.teams
+    || fun.field[c].some((abbr) => teamByAbbr.get(abbr)?.conference !== c))) {
+    fun = { field: defaultField(), picks: {} };
+  }
   const funSeeds = () => Object.fromEntries(F.conferences.map((c) => [c, (fun.field[c] || [])
     .map((abbr, i) => ({ ...(teamByAbbr.get(abbr) || officialSeeds[c]?.find((t) => t.abbr === abbr) || { abbr, team_name: abbr, wins: 0, losses: 0, ties: 0 }), seed: i + 1 }))]));
   const funReady = () => BR.isComplete(funSeeds(), sport);
 
   let mode = haveSeeds ? 'league' : 'fun';
   let editingField = false;
+  let activeSlot = null; // "East:3" while choosing a team for that seed
   let busy = false;
   let saveTimer;
   let saveNote = '';
@@ -1104,34 +1410,61 @@ async function mountBracket(league, members, games, stale) {
       </div>`;
   };
 
+  const recordOf = (t) => (t ? `${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ''}` : '');
   const fieldEditorHtml = () => {
     if (!editingField) return '';
-    const options = (selected) => allTeams.map((t) =>
-      `<option value="${esc(t.abbr)}" ${t.abbr === selected ? 'selected' : ''}>${esc(t.team_name)} (${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ''})</option>`).join('');
+    const slot = (c, i) => {
+      const t = teamByAbbr.get(fun.field[c][i]);
+      const active = activeSlot === `${c}:${i}`;
+      return `
+        <button class="seed-slot ${active ? 'active' : ''}" data-slot-edit="${c}:${i}" aria-expanded="${active}"
+                aria-label="${c} seed ${i + 1}: ${esc(t?.team_name || 'empty')}. Change team">
+          <span class="seed-num">${i + 1}</span>
+          ${t?.logo ? `<img src="${esc(t.logo)}" alt="" width="28" height="28" loading="lazy">` : '<span class="logo-dot"></span>'}
+          <span class="slot-name"><strong>${esc(t?.abbr || '—')}</strong><span class="muted small">${esc(t?.team_name || '')}</span></span>
+          <span class="muted small rec">${recordOf(t)}</span>
+        </button>`;
+    };
+    const chooser = (c) => {
+      if (!activeSlot || !activeSlot.startsWith(`${c}:`)) return '';
+      const idx = Number(activeSlot.split(':')[1]);
+      return `
+        <div class="team-chooser" role="listbox" aria-label="Choose a team for ${c} seed ${idx + 1}">
+          <p class="muted small">Seed ${idx + 1}: pick a team. Teams already in the bracket swap places.</p>
+          <div class="team-grid">
+            ${confTeams(c).map((t) => {
+              const at = fun.field[c].indexOf(t.abbr);
+              return `<button class="team-chip ${at === idx ? 'current' : ''}" role="option" aria-selected="${at === idx}" data-assign="${esc(t.abbr)}">
+                ${t.logo ? `<img src="${esc(t.logo)}" alt="" width="24" height="24" loading="lazy">` : ''}
+                <span><strong>${esc(t.abbr)}</strong><span class="muted small">${recordOf(t)}</span></span>
+                ${at >= 0 ? `<span class="in-seed">#${at + 1}</span>` : ''}
+              </button>`;
+            }).join('')}
+          </div>
+        </div>`;
+    };
     return `
       <section class="card field-editor">
-        <h2>Pick your playoff teams</h2>
-        <p class="muted small">Any ${sportInfo(sport).name} team, any seed. Picking a team that's already in swaps the two.</p>
+        <div class="row between"><h2>Choose the playoff teams</h2>
+          <button class="btn small" data-action="done-field">Done</button></div>
+        ${knowsConferences ? '' : '<p class="muted small">Conferences will be checked once the next sync loads every team.</p>'}
         <div class="field-cols">
           ${F.conferences.map((c) => `
-            <div>
+            <div class="field-conf">
               <h3 class="conf-name">${c}</h3>
-              ${(fun.field[c] || []).map((abbr, i) => `
-                <label class="field-row"><span class="seed">${i + 1}</span>
-                  <select data-field="${c}:${i}" aria-label="${c} seed ${i + 1}">${options(abbr)}</select>
-                </label>`).join('')}
+              <div class="seed-list">${(fun.field[c] || []).map((_, i) => slot(c, i)).join('')}</div>
+              ${chooser(c)}
             </div>`).join('')}
         </div>
-        <div class="row end"><button class="btn ghost small" data-action="reset-field">Reset to ${haveSeeds ? 'real seeds' : 'best records'}</button>
-          <button class="btn small" data-action="done-field">Done</button></div>
+        <div class="row end"><button class="btn ghost small" data-action="reset-field">Reset to ${haveSeeds ? 'real seeds' : 'best records'}</button></div>
       </section>`;
   };
 
   const banner = () => {
     const n = BR.pickCount(sport, seeds(), getPicks());
     if (mode === 'fun') {
-      return `<div class="banner fun"><strong>🎉 Just for fun.</strong> Build any bracket you like, even with your own teams.
-        It's saved on this device and doesn't count in your league. ${n}/${total} picked.</div>`;
+      return `<div class="banner fun"><strong>🛠 Build your own.</strong> Pick any playoff teams and seeds, then play it out.
+        Saved on this device. It doesn't count in your league. ${n}/${total} picked.</div>`;
     }
     if (bstate === 'not_ready') {
       return `<div class="banner"><strong>🔮 Projected bracket.</strong> Seeds are based on today's standings and change as the season goes.
@@ -1199,7 +1532,7 @@ async function mountBracket(league, members, games, stale) {
     root.innerHTML = `
       <div class="mode-switch" role="tablist" aria-label="Bracket type">
         <button role="tab" data-mode="league" aria-selected="${mode === 'league'}" class="${mode === 'league' ? 'active' : ''}" ${haveSeeds ? '' : 'disabled title="Playoff seeds haven\'t loaded yet"'}>League bracket</button>
-        <button role="tab" data-mode="fun" aria-selected="${mode === 'fun'}" class="${mode === 'fun' ? 'active' : ''}">Just for fun</button>
+        <button role="tab" data-mode="fun" aria-selected="${mode === 'fun'}" class="${mode === 'fun' ? 'active' : ''}">Build your own</button>
       </div>
       ${banner()}
       ${editable() ? `
@@ -1207,7 +1540,7 @@ async function mountBracket(league, members, games, stale) {
           <button class="btn sim" data-action="simulate" ${busy ? 'disabled' : ''}>${simLabel}</button>
           <button class="btn secondary" data-action="favorites" ${busy ? 'disabled' : ''}>Pick favorites</button>
           <button class="btn ghost" data-action="clear" ${busy || !n ? 'disabled' : ''}>Clear</button>
-          ${mode === 'fun' ? `<button class="btn ghost" data-action="edit-field" ${busy ? 'disabled' : ''}>✎ Choose teams</button>` : ''}
+          ${mode === 'fun' ? `<button class="btn ghost" data-action="edit-field" ${busy ? 'disabled' : ''}>${editingField ? 'Hide teams' : '✎ Choose teams'}</button>` : ''}
         </div>` : ''}
       ${fieldEditorHtml()}
       ${standingsHtmlB()}
@@ -1237,6 +1570,27 @@ async function mountBracket(league, members, games, stale) {
       draw();
       return;
     }
+    const slotBtn = e.target.closest('[data-slot-edit]');
+    if (slotBtn) {
+      activeSlot = activeSlot === slotBtn.dataset.slotEdit ? null : slotBtn.dataset.slotEdit;
+      draw();
+      return;
+    }
+    const assign = e.target.closest('[data-assign]');
+    if (assign && activeSlot) {
+      const [conf, idxStr] = activeSlot.split(':');
+      const idx = Number(idxStr);
+      const abbr = assign.dataset.assign;
+      const j = fun.field[conf].indexOf(abbr);
+      if (j >= 0) fun.field[conf][j] = fun.field[conf][idx]; // swap places
+      fun.field[conf][idx] = abbr;
+      fun.picks = BR.cleanPicks(sport, funSeeds(), fun.picks);
+      lsSet(funKey, fun);
+      oddsCache = { sig: '', rows: [] };
+      activeSlot = null;
+      draw();
+      return;
+    }
     const modeBtn = e.target.closest('[data-mode]');
     if (modeBtn && !modeBtn.disabled) { mode = modeBtn.dataset.mode; editingField = false; draw(); return; }
     const action = e.target.closest('[data-action]')?.dataset.action;
@@ -1249,28 +1603,12 @@ async function mountBracket(league, members, games, stale) {
     } else if (action === 'clear') {
       setPicks({}); draw();
     } else if (action === 'edit-field') {
-      editingField = !editingField; draw();
+      editingField = !editingField; activeSlot = null; draw();
     } else if (action === 'done-field') {
-      editingField = false; draw();
+      editingField = false; activeSlot = null; draw();
     } else if (action === 'reset-field') {
-      fun.field = defaultField(); fun.picks = {}; lsSet(funKey, fun); draw();
+      fun.field = defaultField(); fun.picks = {}; activeSlot = null; lsSet(funKey, fun); draw();
     }
-  };
-
-  root.onchange = (e) => {
-    const sel = e.target.closest('select[data-field]');
-    if (!sel) return;
-    const [conf, idx] = sel.dataset.field.split(':');
-    const abbr = sel.value;
-    // If the team is already in the field, swap the two spots.
-    for (const c of F.conferences) {
-      const j = fun.field[c].indexOf(abbr);
-      if (j >= 0) fun.field[c][j] = fun.field[conf][Number(idx)];
-    }
-    fun.field[conf][Number(idx)] = abbr;
-    fun.picks = BR.cleanPicks(sport, funSeeds(), fun.picks);
-    lsSet(funKey, fun);
-    draw();
   };
 
   draw();

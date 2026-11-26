@@ -467,3 +467,121 @@ create policy "owner removes members" on public.league_members
 drop policy if exists "owner deletes league" on public.leagues;
 create policy "owner deletes league" on public.leagues
   for delete to authenticated using (created_by = auth.uid());
+
+-- =====================================================================
+-- v5: teams, players and award picks (safe to run on an existing database)
+-- =====================================================================
+
+-- Every team with its conference (from ESPN standings) — used by "Build your own" brackets.
+create table if not exists public.teams (
+  sport      text not null,
+  abbr       text not null,
+  name       text not null,
+  logo       text,
+  conference text not null,
+  wins       int not null default 0,
+  losses     int not null default 0,
+  ties       int not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (sport, abbr)
+);
+
+-- Players (from ESPN rosters, refreshed daily) — used to pick award winners.
+create table if not exists public.players (
+  id         text primary key,          -- "<sport>-<espn id>"
+  sport      text not null,
+  name       text not null,
+  team_abbr  text,
+  position   text,
+  headshot   text,
+  updated_at timestamptz not null default now()
+);
+create index if not exists players_sport on public.players (sport, name);
+
+-- Each player's award picks: player ids, or "custom:<name>" for someone not in the list.
+create table if not exists public.award_picks (
+  league_id   uuid not null references public.leagues (id) on delete cascade,
+  user_id     uuid not null references public.profiles (id) on delete cascade,
+  question_id text not null,
+  players     text[] not null default '{}' check (cardinality(players) <= 10),
+  updated_at  timestamptz not null default now(),
+  primary key (league_id, user_id, question_id)
+);
+
+-- Per-league award settings, set by the league owner: when picks lock, and the real winners.
+create table if not exists public.award_settings (
+  league_id   uuid not null references public.leagues (id) on delete cascade,
+  question_id text not null,
+  locked_at   timestamptz,
+  answers     text[],
+  updated_at  timestamptz not null default now(),
+  primary key (league_id, question_id)
+);
+
+drop trigger if exists award_picks_touch on public.award_picks;
+create trigger award_picks_touch before update on public.award_picks
+  for each row execute function public.touch_updated_at();
+
+create or replace function public.is_league_owner(p_league uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from leagues where id = p_league and created_by = auth.uid());
+$$;
+
+-- Award picks stay open until the owner locks that question.
+create or replace function public.award_is_open(p_league uuid, p_question text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select not exists (
+    select 1 from award_settings
+    where league_id = p_league and question_id = p_question
+      and locked_at is not null and locked_at <= now()
+  );
+$$;
+
+alter table public.teams          enable row level security;
+alter table public.players        enable row level security;
+alter table public.award_picks    enable row level security;
+alter table public.award_settings enable row level security;
+
+drop policy if exists "teams readable" on public.teams;
+create policy "teams readable" on public.teams for select to anon, authenticated using (true);
+drop policy if exists "players readable" on public.players;
+create policy "players readable" on public.players for select to anon, authenticated using (true);
+
+-- award picks: your own always; everyone's once that question is locked; edit only while open
+drop policy if exists "see own award picks" on public.award_picks;
+create policy "see own award picks" on public.award_picks
+  for select to authenticated using (user_id = auth.uid());
+drop policy if exists "see league award picks after lock" on public.award_picks;
+create policy "see league award picks after lock" on public.award_picks
+  for select to authenticated using (is_league_member(league_id) and not award_is_open(league_id, question_id));
+drop policy if exists "make award pick while open" on public.award_picks;
+create policy "make award pick while open" on public.award_picks
+  for insert to authenticated
+  with check (user_id = auth.uid() and is_league_member(league_id) and award_is_open(league_id, question_id));
+drop policy if exists "change award pick while open" on public.award_picks;
+create policy "change award pick while open" on public.award_picks
+  for update to authenticated
+  using (user_id = auth.uid() and award_is_open(league_id, question_id))
+  with check (user_id = auth.uid() and is_league_member(league_id) and award_is_open(league_id, question_id));
+drop policy if exists "remove award pick while open" on public.award_picks;
+create policy "remove award pick while open" on public.award_picks
+  for delete to authenticated using (user_id = auth.uid() and award_is_open(league_id, question_id));
+
+-- award settings: members read; only the owner writes
+drop policy if exists "members see award settings" on public.award_settings;
+create policy "members see award settings" on public.award_settings
+  for select to authenticated using (is_league_member(league_id));
+drop policy if exists "owner sets awards" on public.award_settings;
+create policy "owner sets awards" on public.award_settings
+  for all to authenticated using (is_league_owner(league_id)) with check (is_league_owner(league_id));
+
+grant select on public.teams, public.players to anon, authenticated;
+grant select, insert, update, delete on public.award_picks, public.award_settings to authenticated;
+grant execute on function public.is_league_owner(uuid) to authenticated;
+grant execute on function public.award_is_open(uuid, text) to authenticated;
+
+notify pgrst, 'reload schema';

@@ -9,6 +9,7 @@
 //   node scripts/sync-games.mjs --sport nba      # one sport
 //   node scripts/sync-games.mjs --all            # whole season(s) (setup, and once a day)
 //   node scripts/sync-games.mjs --dry-run        # print what would be saved, save nothing
+//   node scripts/sync-games.mjs --players        # also refresh rosters (always done with --all)
 //   node scripts/sync-games.mjs --sport nfl --fixture f.json [--standings-fixture s.json] --dry-run   (testing)
 //
 // Needs env vars (except with --dry-run): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
@@ -221,6 +222,59 @@ export function seedsFromStandings(data, season, sport) {
   return rows;
 }
 
+// Every team in the standings, with its conference → rows for the teams table.
+export function teamsFromStandings(data, sport) {
+  const rows = [];
+  const groups = (data.children || []).flatMap((g) => (conferenceOf(g, sport) ? [g] : (g.children || [])));
+  for (const group of groups) {
+    const conference = conferenceOf(group, sport);
+    if (!conference) continue;
+    for (const e of entriesUnder(group)) {
+      if (!e.team?.abbreviation) continue;
+      rows.push({
+        sport, abbr: e.team.abbreviation, name: e.team.displayName || e.team.name || e.team.abbreviation,
+        logo: e.team.logos?.[0]?.href || e.team.logo || null, conference,
+        wins: stat(e, 'wins') ?? 0, losses: stat(e, 'losses') ?? 0, ties: stat(e, 'ties', 'otLosses', 'overtimeLosses') ?? 0,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Players (rosters) — refreshed with the daily full reload
+// ---------------------------------------------------------------------------
+
+// ESPN rosters come either flat (NBA) or grouped by position (NFL, NHL, MLB).
+export function playersFromRoster(data, sport, teamAbbr) {
+  const list = (data.athletes || []).flatMap((a) => (Array.isArray(a.items) ? a.items : [a]));
+  return list.filter((a) => a?.id && (a.displayName || a.fullName)).map((a) => ({
+    id: `${sport}-${a.id}`,
+    sport,
+    name: a.displayName || a.fullName,
+    team_abbr: teamAbbr,
+    position: a.position?.abbreviation || a.position?.name || null,
+    headshot: a.headshot?.href || null,
+    updated_at: new Date().toISOString(),
+  }));
+}
+
+async function collectPlayers(sport) {
+  const base = `https://site.api.espn.com/apis/site/v2/sports/${SPORTS[sport].path}`;
+  const teamsData = await espn(`${base}/teams`);
+  const teams = (teamsData.sports?.[0]?.leagues?.[0]?.teams || []).map((t) => t.team).filter(Boolean);
+  const rows = [];
+  for (const t of teams) {
+    try {
+      rows.push(...playersFromRoster(await espn(`${base}/teams/${t.id}/roster`), sport, t.abbreviation));
+    } catch (err) {
+      console.warn(`[${sport}] roster for ${t.abbreviation} skipped: ${err.message}`);
+    }
+  }
+  return rows;
+}
+
 // ---------------------------------------------------------------------------
 // Fetch plans
 // ---------------------------------------------------------------------------
@@ -377,15 +431,32 @@ async function syncSport(sport) {
 
   // Playoff seeds: keep updating through the regular season; freeze once the playoffs start.
   let seeds = [];
+  let teams = [];
+  let standings = null;
   if (STANDINGS_FIXTURE) {
-    seeds = seedsFromStandings(JSON.parse(await readFile(STANDINGS_FIXTURE, 'utf8')), 2026, sport);
-  } else if (!FIXTURE && season && seasonType === 2) {
+    standings = JSON.parse(await readFile(STANDINGS_FIXTURE, 'utf8'));
+  } else if (!FIXTURE && season) {
     try {
       const url = new URL(`https://site.api.espn.com/apis/v2/sports/${cfg.path}/standings`);
       url.searchParams.set('season', season);
-      seeds = seedsFromStandings(await espn(url), season, sport);
+      standings = await espn(url);
     } catch (err) {
-      console.warn(`[${sport}] skipping seeds: ${err.message}`);
+      console.warn(`[${sport}] skipping standings: ${err.message}`);
+    }
+  }
+  if (standings) {
+    teams = teamsFromStandings(standings, sport);
+    if (STANDINGS_FIXTURE || seasonType === 2) seeds = seedsFromStandings(standings, season || 2026, sport);
+  }
+  if (teams.length) console.log(`[${sport}] ${teams.length} teams`);
+
+  let players = [];
+  if ((ALL || flag('--players')) && !FIXTURE) {
+    try {
+      players = await collectPlayers(sport);
+      console.log(`[${sport}] ${players.length} players`);
+    } catch (err) {
+      console.warn(`[${sport}] skipping players: ${err.message}`);
     }
   }
   const fullField = seeds.length === cfg.playoffTeams * 2;
@@ -398,10 +469,15 @@ async function syncSport(sport) {
     }
     if (unique.length > 40) console.log(`  … and ${unique.length - 40} more`);
     for (const s of seeds) console.log(`  ${s.conference} #${s.seed} ${s.team_abbr} (${s.wins}-${s.losses}${s.ties ? `-${s.ties}` : ''})`);
+    const byConf = {};
+    for (const t of teams) (byConf[t.conference] ||= []).push(t.abbr);
+    for (const [c, list] of Object.entries(byConf)) console.log(`  teams ${c}: ${list.join(' ')}`);
     return;
   }
   if (unique.length) await saveRows(unique);
   if (fullField) await saveRows(seeds, 'playoff_seeds', 'sport,season,conference,seed');
+  if (teams.length) await saveRows(teams, 'teams', 'sport,abbr');
+  if (players.length) await saveRows([...new Map(players.map((p) => [p.id, p])).values()], 'players', 'id');
   console.log(`[${sport}] saved.`);
 }
 
