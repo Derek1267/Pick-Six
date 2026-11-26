@@ -452,6 +452,20 @@ async function syncSport(sport) {
   }
   if (standings) {
     teams = teamsFromStandings(standings, sport);
+    // The default standings are conference-level; ask for division-level ones to learn divisions.
+    if (!STANDINGS_FIXTURE && teams.length && teams.every((t) => !t.division)) {
+      try {
+        const url = new URL(`https://site.api.espn.com/apis/v2/sports/${cfg.path}/standings`);
+        url.searchParams.set('season', season);
+        url.searchParams.set('level', '3');
+        const byDivision = teamsFromStandings(await espn(url), sport);
+        const division = new Map(byDivision.filter((t) => t.division).map((t) => [t.abbr, t.division]));
+        if (division.size) teams = teams.map((t) => ({ ...t, division: division.get(t.abbr) || null }));
+        else console.warn(`[${sport}] division standings had no divisions`);
+      } catch (err) {
+        console.warn(`[${sport}] no division standings: ${err.message}`);
+      }
+    }
     if (STANDINGS_FIXTURE || seasonType === 2) seeds = seedsFromStandings(standings, season || 2026, sport);
   }
   if (teams.length) console.log(`[${sport}] ${teams.length} teams`);
