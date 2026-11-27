@@ -227,6 +227,9 @@ function fmtCountdown(iso) {
 }
 
 const isOpen = (g) => g.status === 'pre' && new Date(g.start_time) > new Date();
+// League rules the owner can change (Manage → League rules). Defaults keep the original game.
+const DEFAULT_SETTINGS = { lockOfWeek: true, upsetBonus: false, autoPick: false, deadline: 'game', lateCatchUp: false };
+const settingsOf = (league) => ({ ...DEFAULT_SETTINGS, ...(league?.settings || {}) });
 const nameOf = (members, id) => members.find((m) => m.user_id === id)?.name ?? 'Someone';
 const inviteLink = (code) => `${location.origin}${location.pathname}#/join/${code}`;
 
@@ -825,13 +828,19 @@ async function picksHtml(league, members, games, route) {
   const wk = weeks[idx];
   const ids = wk.games.map((g) => g.id);
 
-  const picksRes = await sb.from('picks').select('user_id, game_id, pick')
+  const picksRes = await sb.from('picks').select('user_id, game_id, pick, is_lock')
     .eq('league_id', league.id).in('game_id', ids);
   const picks = picksRes.data || [];
   const me = state.session.user.id;
   const mine = new Map(picks.filter((p) => p.user_id === me).map((p) => [p.game_id, p.pick]));
+  const rules = settingsOf(league);
+  const myLock = rules.lockOfWeek ? picks.find((p) => p.user_id === me && p.is_lock)?.game_id || null : null;
+  // "Whole week" deadline: everything in this slate locks when its first game starts.
+  const firstStart = Math.min(...wk.games.map((g) => new Date(g.start_time)));
+  const gameOpen = (g) => isOpen(g) && (rules.deadline !== 'week' || firstStart > Date.now());
+  const lockUsed = myLock && !gameOpen(wk.games.find((g) => g.id === myLock) || {});
 
-  const open = wk.games.filter(isOpen);
+  const open = wk.games.filter(gameOpen);
   const pickedOpen = open.filter((g) => mine.has(g.id)).length;
   const graded = wk.games.filter((g) => g.winner && mine.has(g.id));
   const right = graded.filter((g) => mine.get(g.id) === g.winner).length;
@@ -868,9 +877,20 @@ async function picksHtml(league, members, games, route) {
     </div>`;
 
   const draws = !!sportInfo(league.sport).draws;
-  const cards = wk.games.map((g) => gameCard(g, mine.get(g.id), picks, members, me, draws)).join('');
+  const ctx = { rules, myLock, lockUsed, gameOpen, unit };
+  const cards = wk.games.map((g) => gameCard(g, mine.get(g.id), picks, members, me, draws, ctx)).join('');
 
-  return nav + summary + `<div class="games">${cards}</div>`;
+  // Reminder: games locking in the next 24 hours that still need your pick.
+  const soon = open.filter((g) => !mine.has(g.id) && new Date(g.start_time) - Date.now() < 864e5);
+  const reminder = soon.length ? `<div class="reminder">${ICON.calendar}<p><strong>${soon.length} game${soon.length === 1 ? '' : 's'}
+      lock${soon.length === 1 ? 's' : ''} in the next 24 hours without your pick.</strong>
+      ${rules.deadline === 'week' ? 'This league locks the whole ' + unit + ' at the first game.' : ''}</p></div>` : '';
+  const tools = `<div class="pick-tools">
+      ${rules.lockOfWeek ? `<span class="muted small">${ICON.lock} Lock of the ${unit}: ${myLock ? 'set, counts double' : 'tap “Lock it” on one pick to double it'}</span>` : '<span></span>'}
+      <button class="btn small secondary" id="ics-btn">${ICON.calendar}Add to calendar</button></div>`;
+
+  state.icsGames = wk.games;
+  return nav + reminder + summary + tools + `<div class="games">${cards}</div>`;
 }
 
 function teamButton(g, side, myPick, locked) {
@@ -905,8 +925,10 @@ function drawButton(g, myPick, locked) {
       <span>Draw</span>${picked ? `<span class="badge">${result === 'correct' ? '✓' : result === 'wrong' ? '✗' : 'Pick'}</span>` : ''}</button>`;
 }
 
-function gameCard(g, myPick, picks, members, me, draws = false) {
-  const locked = !isOpen(g);
+function gameCard(g, myPick, picks, members, me, draws = false, ctx = {}) {
+  const locked = ctx.gameOpen ? !ctx.gameOpen(g) : !isOpen(g);
+  const rules = ctx.rules || DEFAULT_SETTINGS;
+  const isLock = ctx.myLock === g.id;
   let status;
   if (g.status === 'post') status = `<span class="status final">${esc(g.status_detail || 'Final')}</span>`;
   else if (g.status === 'in') status = `<span class="status live">● ${esc(g.status_detail || 'Live')}</span>`;
@@ -922,8 +944,14 @@ function gameCard(g, myPick, picks, members, me, draws = false) {
     const tied = gp.filter((p) => p.pick === 'tie');
     const who = (list) => list.map((p) => `<span class="pill ${p.user_id === me ? 'me' : ''}">${esc(nameOf(members, p.user_id))}</span>`).join('') || '<span class="muted small">nobody</span>';
     const pct = gp.length ? Math.round((away.length / gp.length) * 100) : 50;
+    // "8 of 10 picked DAL": the crowd's side, so you can see who went against it.
+    const lead = home.length >= away.length ? ['home', home.length, g.home_abbr] : ['away', away.length, g.away_abbr];
+    const splitText = gp.length ? `<p class="split-text"><strong>${lead[1]} of ${gp.length}</strong> picked ${esc(lead[2])}${tied.length ? ` · ${tied.length} picked a draw` : ''}${
+      myPick && myPick !== lead[0] && myPick !== 'tie' ? ' <span class="pill against">You went against the crowd</span>' : ''}</p>` : '';
+    const autoNote = !myPick && rules.autoPick ? `<p class="muted small auto-note">Auto pick: ${esc((g.away_record && recPct(g.away_record) > recPct(g.home_record)) ? g.away_abbr : g.home_abbr)} (better record)</p>` : '';
     reveal = gp.length ? `
       <div class="reveal">
+        ${splitText}${autoNote}
         <div class="split" style="--pct:${pct}%"><span></span></div>
         <div class="reveal-cols ${draws ? 'three' : ''}">
           <div>${who(away)}</div>
@@ -935,9 +963,13 @@ function gameCard(g, myPick, picks, members, me, draws = false) {
     status += ' <span class="nudge">Pick needed</span>';
   }
 
+  const lockBtn = rules.lockOfWeek && myPick && (!locked || isLock)
+    ? (isLock ? `<span class="lock-tag">${ICON.lock}Lock ×2</span>`
+      : !ctx.lockUsed ? `<button class="lock-btn" data-lock-game="${esc(g.id)}">${ICON.lock}Lock it</button>` : '')
+    : '';
   return `
-    <article class="game ${locked ? 'locked' : ''}">
-      <div class="game-top">${status}</div>
+    <article class="game ${locked ? 'locked' : ''} ${isLock ? 'is-lock' : ''}">
+      <div class="game-top">${status}${lockBtn}</div>
       <div class="matchup">
         ${teamButton(g, 'away', myPick, locked)}
         ${draws ? drawButton(g, myPick, locked) : '<span class="at">@</span>'}
@@ -945,6 +977,38 @@ function gameCard(g, myPick, picks, members, me, draws = false) {
       </div>
       ${reveal}
     </article>`;
+}
+
+const recPct = (r) => {
+  const [w, l, t = 0] = String(r || '').split('-').map(Number);
+  const gp = w + l + t;
+  return gp ? (w + t / 2) / gp : 0;
+};
+
+async function setLock(league, gameId) {
+  const { error } = await sb.from('picks').update({ is_lock: true })
+    .eq('league_id', league.id).eq('user_id', state.session.user.id).eq('game_id', gameId);
+  if (error) toast(friendlyError(error), 'error');
+  else toast('Locked in. This pick counts double.', 'good');
+  render();
+}
+
+// A calendar file (.ics) with this week's games, for any calendar app. No account needed.
+function downloadIcs(league, games) {
+  const stamp = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Pick Six//EN', 'CALSCALE:GREGORIAN'];
+  for (const g of games) {
+    const start = new Date(g.start_time);
+    lines.push('BEGIN:VEVENT', `UID:${g.id}@pick-six`, `DTSTAMP:${stamp(Date.now())}`, `DTSTART:${stamp(start)}`,
+      `DTEND:${stamp(start.getTime() + 3 * 36e5)}`, `SUMMARY:${g.away_abbr} @ ${g.home_abbr} (picks lock)`,
+      `DESCRIPTION:Make your pick: ${location.origin}${location.pathname}#/league/${league.id}`,
+      'BEGIN:VALARM', 'TRIGGER:-PT1H', 'ACTION:DISPLAY', 'DESCRIPTION:Picks lock in an hour', 'END:VALARM', 'END:VEVENT');
+  }
+  lines.push('END:VCALENDAR');
+  const url = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/calendar' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: `pick-six-${league.sport}.ics` });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function makePick(league, gameId, side, btn) {
@@ -2354,6 +2418,9 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSlate
 app.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-pick]');
   if (btn && !btn.disabled && state.league) makePick(state.league, btn.dataset.game, btn.dataset.pick, btn);
+  const lock = e.target.closest('[data-lock-game]');
+  if (lock && state.league) setLock(state.league, lock.dataset.lockGame);
+  if (e.target.closest('#ics-btn') && state.league) downloadIcs(state.league, state.icsGames || []);
 });
 
 // ---------------------------------------------------------------------------
