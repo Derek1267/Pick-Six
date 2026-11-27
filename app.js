@@ -522,7 +522,7 @@ function renderHow() {
         </ul>
         <p class="muted small">Formats: NFL 7 teams per conference (with a bye and re-seeding), NBA and NHL 8 teams with best-of-7 series
           (the NHL's real division-based pairings are simplified), MLB 6 teams per league with byes for the top two,
-          MLS 8 teams per conference with a best-of-3 first round (the 8 v 9 wild card game is folded in),
+          MLS 9 teams per conference (8 v 9 play a wild card game, then a best-of-3 first round),
           and NLL the top 8 overall: single-game quarterfinals, then best-of-3 semifinals and Finals.</p>
       </section>
 
@@ -2067,6 +2067,10 @@ async function mountBracket(league, members, games, stale, route) {
 
   const playInHtml = (b) => {
     if (!b[c0].playIn) return '';
+    if (F.wildCard) {
+      const block = (c) => `<div class="pi-conf"><h4>${esc(label(c))}</h4><div class="pi-games one">${matchup(b[c].playIn[0], '8 v 9: winner is the 8 seed')}</div></div>`;
+      return `<section class="playin"><h3>Wild card</h3><div class="pi-wrap">${block(c0)}${block(c1)}</div></section>`;
+    }
     const block = (c) => `<div class="pi-conf"><h4>${esc(c)}</h4><div class="pi-games">
       ${matchup(b[c].playIn[0], '7 v 8: winner is 7th')}
       ${matchup(b[c].playIn[1], '9 v 10: loser is out')}
@@ -2158,7 +2162,8 @@ async function mountBracket(league, members, games, stale, route) {
       const full = fun.field[c].every(Boolean);
       const rows = fun.field[c].map((abbr, i) => {
         const t = teamByAbbr.get(abbr);
-        const divider = F.playIn && i === F.teams - 2 ? '<li class="cut cut-playin"><span>Play-in tournament: seeds 7 to 10</span></li>' : '';
+        const divider = F.playIn && i === F.teams - 2 ? '<li class="cut cut-playin"><span>Play-in tournament: seeds 7 to 10</span></li>'
+          : F.wildCard && i === F.teams - 1 ? '<li class="cut cut-playin"><span>Wild card: 8 v 9</span></li>' : '';
         return `${divider}<li class="seed-row ${abbr ? '' : 'open'}">
           <span class="rank">${i + 1}</span>
           ${abbr ? `${teamLogo(t, 28)}<span class="r-team"><strong>${esc(t?.name || abbr)}</strong><span class="muted small">${recordText(t)}</span></span>
@@ -2219,7 +2224,7 @@ async function mountBracket(league, members, games, stale, route) {
         </div>` : ''}
       </div>
       ${mode === 'fun' ? `<p class="lede-sm">${showField
-        ? `Pick the ${fieldSize} teams${F.single ? '' : ` per ${sport === 'mlb' ? 'league' : 'conference'}`} that make it${F.playIn ? ', including the four in the play-in tournament' : ''}, in seed order. Saved on this device. It doesn’t count in your league.`
+        ? `Pick the ${fieldSize} teams${F.single ? '' : ` per ${sport === 'mlb' ? 'league' : 'conference'}`} that make it${F.playIn ? ', including the four in the play-in tournament' : F.wildCard ? ', including the two in the wild card game' : ''}, in seed order. Saved on this device. It doesn’t count in your league.`
         : 'Play out your bracket. Tap a team to advance it, or simulate.'}</p>` : banner()}
       ${showField ? fieldHtml() : `
         ${bracketStandings()}

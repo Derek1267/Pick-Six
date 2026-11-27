@@ -514,6 +514,7 @@ button.spot.empty:hover, button.spot.empty:focus-visible { border-style: solid; 
 @media (max-width: 760px) { .pi-wrap { grid-template-columns: 1fr; } }
 .pi-conf h4 { margin-bottom: .4rem; }
 .pi-games { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+.pi-games.one { grid-template-columns: minmax(0, 1fr); max-width: 260px; }
 @media (max-width: 520px) { .pi-games { grid-template-columns: 1fr; } }
 .bm-label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: .3rem .5rem; font-size: .72rem; color: var(--muted); border-bottom: 1px solid var(--line); }
 

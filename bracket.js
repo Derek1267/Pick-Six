@@ -49,7 +49,9 @@ export const FORMATS = {
   },
   mls: {
     conferences: ['East', 'West'],
-    teams: 8, // simplified: the 8 v 9 wild card is folded into seed 8
+    teams: 8,
+    // 9 teams per conference: 8 v 9 play a one-game wild card; the winner is the 8 seed.
+    wildCard: true,
     rounds: ['Round One', 'Conf. Semis', 'Conf. Final', 'MLS Cup'],
     bestOf: [3, 1, 1, 1],
     r1: [[1, 8], [4, 5], [3, 6], [2, 7]],
@@ -75,7 +77,8 @@ export const FORMATS = {
 // The standings tables a sport is ranked in (NLL: one table; everyone else: two conferences).
 export const tablesOf = (sport) => { const f = formatOf(sport); return f.single ? [f.single] : f.conferences; };
 // Playoff teams chosen per table in "Build your own".
-export const fieldSizeOf = (sport) => { const f = formatOf(sport); return f.single ? f.teams * 2 : f.teams + (f.playIn ? 2 : 0); };
+export const extraSeeds = (sport) => { const f = formatOf(sport); return f.playIn ? 2 : f.wildCard ? 1 : 0; };
+export const fieldSizeOf = (sport) => { const f = formatOf(sport); return f.single ? f.teams * 2 : f.teams + extraSeeds(sport); };
 export const confLabel = (sport, c) => formatOf(sport).labels?.[c] || c;
 const pairsFor = (f, conf) => (Array.isArray(f.r1) ? f.r1 : f.r1[conf]);
 // One seeded list (seeds 1–8) → the two halves of a single-table bracket.
@@ -117,7 +120,7 @@ export function seedsByConference(rows, sport) {
 
 export const hasPlayIn = (seeds, sport) => {
   const f = formatOf(sport);
-  return !!f.playIn && f.conferences.every((c) => seeds[c]?.length === f.teams + 2);
+  return extraSeeds(sport) > 0 && f.conferences.every((c) => seeds[c]?.length === f.teams + extraSeeds(sport));
 };
 export const isComplete = (seeds, sport) => {
   const f = formatOf(sport);
@@ -158,6 +161,11 @@ export function buildBracket(sport, seeds, picks = {}) {
       const seven = pi0.winner ? { ...pi0.winner, seed: 7 } : null;
       const eight = pi2.winner ? { ...pi2.winner, seed: 8 } : null;
       bySeed = (n) => (n === 7 ? seven : n === 8 ? eight : seedTeam(n));
+    } else if (f.wildCard && seedTeam(9)) {
+      const wc = game(id('PI', 0), seedTeam(8), seedTeam(9), picks, 1);
+      playIn = [wc];
+      const eight = wc.winner ? { ...wc.winner, seed: 8 } : null;
+      bySeed = (n) => (n === 8 ? eight : seedTeam(n));
     }
 
     const r1 = pairsFor(f, conf).map(([h, a], i) => game(id('R1', i), bySeed(h), bySeed(a), picks, f.bestOf[0]));
@@ -217,7 +225,7 @@ export function cleanPicks(sport, seeds, picks) {
 export const totalGames = (sport, seeds = null) => {
   const f = formatOf(sport);
   const r1 = f.conferences.reduce((n, c) => n + pairsFor(f, c).length, 0);
-  return r1 + (f.r2 ? f.r2.length : 2) * 2 + (f.rounds.length === 4 ? 2 : 0) + 1 + (seeds && hasPlayIn(seeds, sport) ? 6 : 0);
+  return r1 + (f.r2 ? f.r2.length : 2) * 2 + (f.rounds.length === 4 ? 2 : 0) + 1 + (seeds && hasPlayIn(seeds, sport) ? (f.playIn ? 6 : 2) : 0);
 };
 export const pickCount = (sport, seeds, picks) =>
   allGames(sport, buildBracket(sport, seeds, picks)).filter((g) => g.winner).length;

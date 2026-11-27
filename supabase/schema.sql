@@ -449,7 +449,7 @@ create index if not exists games_slate on public.games (sport, season, slate);
 alter table public.playoff_seeds drop constraint if exists playoff_seeds_conference_check;
 alter table public.playoff_seeds drop constraint if exists playoff_seeds_seed_check;
 do $$ begin
-  alter table public.playoff_seeds add constraint playoff_seeds_seed_check check (seed between 1 and 8);
+  alter table public.playoff_seeds add constraint playoff_seeds_seed_check check (seed between 1 and 10);
 exception when duplicate_object then null;
 end $$;
 

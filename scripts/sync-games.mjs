@@ -49,7 +49,8 @@ export const SPORTS = {
     mode: 'daily',
     slateBy: 'week',
     conferences: [['East', ['EASTERN', 'EAST']], ['West', ['WESTERN', 'WEST']]],
-    playoffTeams: 8,
+    playoffTeams: 9, // 8 v 9 wild card
+    seedsAnytime: true, // soccer season types are odd numbers; final standings don't move in the playoffs
   },
   nll: {
     path: 'lacrosse/nll',
@@ -550,7 +551,7 @@ async function syncSport(sport) {
         console.warn(`[${sport}] no division standings: ${err.message}`);
       }
     }
-    if (STANDINGS_FIXTURE || seasonType === 2) seeds = seedsFromStandings(standings, season || 2026, sport);
+    if (STANDINGS_FIXTURE || seasonType === 2 || cfg.seedsAnytime) seeds = seedsFromStandings(standings, season || 2026, sport);
   }
   if (teams.length) console.log(`[${sport}] ${teams.length} teams`);
 
