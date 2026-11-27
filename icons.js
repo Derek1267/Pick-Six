@@ -28,6 +28,7 @@ export const ICON = {
   check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
   dice: svg('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 8.5h.01M15.5 8.5h.01M12 12h.01M8.5 15.5h.01M15.5 15.5h.01"/>'),
   back: svg('<path d="m15 5-7 7 7 7"/>'),
+  chevron: svg('<path d="m6 9 6 6 6-6"/>'),
 };
 
 // Award category → icon

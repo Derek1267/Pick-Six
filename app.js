@@ -685,8 +685,18 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
   if (stale()) return;
   page.innerHTML = body;
 
-  const sel = document.getElementById('week-select');
-  if (sel) sel.onchange = () => go(`#/league/${league.id}?week=${sel.value}`);
+  const slateBtn = document.getElementById('slate-btn');
+  if (slateBtn) {
+    const menu = document.getElementById('slate-menu');
+    const close = () => { menu.hidden = true; slateBtn.setAttribute('aria-expanded', 'false'); };
+    slateBtn.onclick = (e) => {
+      e.stopPropagation();
+      menu.hidden = !menu.hidden;
+      slateBtn.setAttribute('aria-expanded', String(!menu.hidden));
+      if (!menu.hidden) menu.querySelector('.slate-opt.on')?.scrollIntoView({ block: 'center' });
+    };
+    menu.onclick = (e) => { if (e.target.closest('.slate-opt')) close(); };
+  }
 
   prefetchLeague(league); // warm the other tabs while you look at this one
 
@@ -770,8 +780,8 @@ function groupSlates(games, sport) {
     const k = g.slate || weekKey(g.season_type, g.week);
     if (!slates.has(k)) {
       slates.set(k, { key: k, type: g.season_type, week: g.week, games: [],
-        label: sportInfo(sport).weekSlates ? weekLabel(g.season_type, g.week, sport)
-          : daily ? dayLabel(k) : weekLabel(g.season_type, g.week, sport) });
+        label: (sportInfo(sport).weekSlates ? weekLabel(g.season_type, g.week, sport)
+          : daily ? dayLabel(k) : weekLabel(g.season_type, g.week, sport)).replace(/^Playoffs · /, '') });
     }
     slates.get(k).games.push(g);
   }
@@ -828,13 +838,25 @@ async function picksHtml(league, members, games, route) {
   const nextLock = open.find((g) => !mine.has(g.id)) || open[0];
 
   const weekLink = (w) => `#/league/${league.id}?week=${w.key}`;
+  // Our own dropdown (the browser's one can't be styled): grouped into regular season and playoffs.
+  const groupName = (w) => (w.type === 3 ? 'Playoffs' : 'Regular season');
+  const groups = [...new Set(weeks.map(groupName))];
   const nav = `
     <div class="week-nav">
-      ${idx > 0 ? `<a class="btn icon ghost" href="${weekLink(weeks[idx - 1])}" aria-label="Previous ${unit}">‹</a>` : '<span class="btn icon ghost disabled">‹</span>'}
-      <select id="week-select" aria-label="Choose ${unit}">
-        ${weeks.map((w) => `<option value="${w.key}" ${w.key === key ? 'selected' : ''}>${esc(w.label)}${w.type === 3 && unit === 'day' ? ' · Playoffs' : ''}</option>`).join('')}
-      </select>
-      ${idx < weeks.length - 1 ? `<a class="btn icon ghost" href="${weekLink(weeks[idx + 1])}" aria-label="Next ${unit}">›</a>` : '<span class="btn icon ghost disabled">›</span>'}
+      ${idx > 0 ? `<a class="nav-arrow" href="${weekLink(weeks[idx - 1])}" aria-label="Previous ${unit}">${ICON.back}</a>` : `<span class="nav-arrow off">${ICON.back}</span>`}
+      <div class="slate-pick">
+        <button class="slate-btn" id="slate-btn" aria-haspopup="listbox" aria-expanded="false">
+          <span class="slate-kicker">${esc(groupName(wk))}</span>
+          <span class="slate-label">${esc(wk.label)}</span>
+          ${ICON.chevron}
+        </button>
+        <div class="slate-menu" id="slate-menu" role="listbox" aria-label="Choose ${unit}" hidden>
+          ${groups.map((gname) => `<h5>${esc(gname)}</h5><div class="slate-grid">${weeks.filter((w) => groupName(w) === gname).map((w) => `
+            <a role="option" class="slate-opt ${w.key === key ? 'on' : ''}" aria-selected="${w.key === key}" href="${weekLink(w)}">
+              <span>${esc(w.label)}</span><small>${w.games.length} game${w.games.length === 1 ? '' : 's'}</small></a>`).join('')}</div>`).join('')}
+        </div>
+      </div>
+      ${idx < weeks.length - 1 ? `<a class="nav-arrow next" href="${weekLink(weeks[idx + 1])}" aria-label="Next ${unit}">${ICON.back}</a>` : `<span class="nav-arrow next off">${ICON.back}</span>`}
     </div>`;
 
   const summary = `
@@ -2307,6 +2329,13 @@ async function mountBracket(league, members, games, stale, route) {
 
   draw();
 }
+
+// Close the week/day menu when clicking elsewhere or pressing Escape.
+const closeSlateMenus = () => document.querySelectorAll('.slate-menu:not([hidden])').forEach((m) => {
+  m.hidden = true; m.previousElementSibling?.setAttribute('aria-expanded', 'false');
+});
+document.addEventListener('click', (e) => { if (!e.target.closest('.slate-pick')) closeSlateMenus(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSlateMenus(); });
 
 // One click handler for every pick button (survives re-renders).
 app.addEventListener('click', (e) => {
