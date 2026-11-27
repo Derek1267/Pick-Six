@@ -32,7 +32,7 @@ const SAF = ['S', 'FS', 'SS', 'DB'];
 // Awards (3 points each)
 // ---------------------------------------------------------------------------
 
-const award = (id, title, note, more = {}) => ({ id, title, note, sections: [S('Pick', 1)], points: 3, ...more });
+const award = (id, title, note, more = {}) => ({ id, title, note, sections: [S('Pick', 1, more.pos ? { pos: more.pos } : {})], points: 3, ...more });
 const teamAward = (id, title, note, more = {}) => award(id, title, note, { pick: 'team', ...more });
 
 export const AWARD_CATEGORIES = {
@@ -79,13 +79,13 @@ export const AWARDS = {
   nhl: [
     award('hart', 'Hart Trophy', 'Most valuable player', { cat: 'season' }),
     award('lindsay', 'Ted Lindsay Award', 'Best player, voted by players', { cat: 'season' }),
-    award('vezina', 'Vezina Trophy', 'Best goaltender', { cat: 'season' }),
-    award('norris', 'Norris Trophy', 'Best defenceman', { cat: 'season' }),
+    award('vezina', 'Vezina Trophy', 'Best goaltender', { cat: 'season', pos: ['G'] }),
+    award('norris', 'Norris Trophy', 'Best defenceman', { cat: 'season', pos: ['D'] }),
     award('calder', 'Calder Trophy', 'Rookie of the year', { cat: 'season' }),
-    award('selke', 'Selke Trophy', 'Best defensive forward', { cat: 'season' }),
+    award('selke', 'Selke Trophy', 'Best defensive forward', { cat: 'season', pos: ['C', 'LW', 'RW'] }),
     award('artross', 'Art Ross Trophy', 'Most points', { cat: 'stats' }),
     award('rocket', 'Rocket Richard Trophy', 'Most goals', { cat: 'stats' }),
-    award('jennings', 'William M. Jennings Trophy', 'Fewest goals against', { cat: 'stats' }),
+    award('jennings', 'William M. Jennings Trophy', 'Fewest goals against', { cat: 'stats', pos: ['G'] }),
     teamAward('adams', 'Jack Adams Award', 'Coach of the year', { cat: 'staff' }),
     teamAward('gm', 'General Manager of the Year', 'Front office', { cat: 'staff' }),
     award('connsmythe', 'Conn Smythe Trophy', 'Playoff MVP', { cat: 'post' }),
@@ -96,8 +96,8 @@ export const AWARDS = {
   mlb: [
     award('almvp', 'AL MVP', null, { cat: 'season', filter: { conference: 'AL' } }),
     award('nlmvp', 'NL MVP', null, { cat: 'season', filter: { conference: 'NL' } }),
-    award('alcy', 'AL Cy Young', null, { cat: 'season', filter: { conference: 'AL' } }),
-    award('nlcy', 'NL Cy Young', null, { cat: 'season', filter: { conference: 'NL' } }),
+    award('alcy', 'AL Cy Young', null, { cat: 'season', filter: { conference: 'AL' }, pos: ['SP', 'RP'] }),
+    award('nlcy', 'NL Cy Young', null, { cat: 'season', filter: { conference: 'NL' }, pos: ['SP', 'RP'] }),
     award('alroy', 'AL Rookie of the Year', null, { cat: 'season', filter: { conference: 'AL' } }),
     award('nlroy', 'NL Rookie of the Year', null, { cat: 'season', filter: { conference: 'NL' } }),
     award('alrel', 'AL Reliever of the Year', 'Mariano Rivera Award', { cat: 'season', filter: { conference: 'AL' } }),
@@ -117,7 +117,7 @@ export const AWARDS = {
   mls: [
     award('mvp', 'Most Valuable Player', 'Landon Donovan MVP', { cat: 'season' }),
     award('gk', 'Goalkeeper of the Year', null, { cat: 'season', pos: ['G', 'GK'] }),
-    award('defender', 'Defender of the Year', null, { cat: 'season' }),
+    award('defender', 'Defender of the Year', null, { cat: 'season', pos: ['D'] }),
     award('young', 'Young Player of the Year', 'Age 22 and under', { cat: 'season' }),
     award('newcomer', 'Newcomer of the Year', 'New to MLS', { cat: 'season' }),
     award('comeback', 'Comeback Player of the Year', null, { cat: 'season' }),
@@ -132,9 +132,9 @@ export const AWARDS = {
   nll: [
     award('mvp', 'Most Valuable Player', null, { cat: 'season' }),
     award('roy', 'Rookie of the Year', null, { cat: 'season' }),
-    award('goalie', 'Goaltender of the Year', null, { cat: 'season' }),
+    award('goalie', 'Goaltender of the Year', null, { cat: 'season', pos: ['G'] }),
     award('dpoy', 'Defensive Player of the Year', null, { cat: 'season' }),
-    award('transition', 'Transition Player of the Year', null, { cat: 'season' }),
+    award('transition', 'Transition Player of the Year', null, { cat: 'season', pos: ['T'] }),
     award('points', 'Scoring leader', 'Most points', { cat: 'stats' }),
     award('goals', 'Goals leader', 'Most goals', { cat: 'stats' }),
     teamAward('coy', 'Coach of the Year', 'Les Bartley Award', { cat: 'staff' }),

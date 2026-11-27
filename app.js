@@ -12,7 +12,7 @@ import * as BR from './bracket.js';
 import * as SEL from './selections.js';
 import { ICON, CAT_ICON, SURFACE, ILLO } from './icons.js';
 import { STAFF_ROLE, staffFor } from './staff.js';
-import { FAVOURITES, FAVOURITES_AS_OF, FAVOURITE_TITLE } from './favourites.js';
+import { FAVOURITES, FAVOURITES_AS_OF, FAVOURITE_TITLE, STARS, NO_SUGGESTIONS } from './favourites.js';
 
 const app = document.getElementById('app');
 const accountNav = document.getElementById('account');
@@ -1570,8 +1570,23 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
         <h3 class="pick-sub">${ICON.users}All teams</h3>
         <div class="plist">${[...pool].sort((a, b) => a.name.localeCompare(b.name)).filter((t) => !used.has(`team:${t.abbr}`)).map((t) => teamRow(sheet, t)).join('')}</div>`;
     }
-    if (!curated?.length) return '';
     const allowed = sheet.filter ? new Set(teamsFor(sheet).map((t) => t.abbr)) : null;
+    if (!curated?.length) {
+      // No odds for this spot: suggest well-known players who fit it (position, conference, not used yet).
+      if (kind === 'awards' && NO_SUGGESTIONS.test(awardId)) return '';
+      const rule = SEL.slotRule(sport, sheet, active.flat);
+      const fit = SEL.slotPositions(sheet, active.flat);
+      const ok = (p) => !p.id.startsWith('custom:') && !used.has(p.id) && (!allowed || allowed.has(p.team_abbr))
+        && (!rule?.only || rule.only.includes(p.position)) && (!rule?.not || !rule.not.includes(p.position))
+        && (kind !== 'awards' || !fit?.length || fit.includes(p.position));
+      const pool = (await favouritePlayers(sport, STARS[sport] || [])).filter(ok);
+      const fits = (p) => (fit?.length ? fit.includes(p.position) : true);
+      const picks = [...pool.filter(fits), ...pool.filter((p) => !fits(p))].slice(0, 5);
+      if (!picks.length) return '';
+      return `<h3 class="pick-sub">${ICON.star}Suggestions <span class="muted">well-known players for this spot, not odds</span></h3>
+        <div class="plist">${picks.map((p, i) => pickRow(p.id, { kind: 'player', name: p.name, headshot: p.headshot },
+          [p.team_abbr, p.position].filter(Boolean).join(' · '), i + 1)).join('')}</div>`;
+    }
     const players = (await favouritePlayers(sport, curated))
       .filter((p) => !used.has(p.id) && (!allowed || !p.team_abbr || allowed.has(p.team_abbr)));
     if (!players.length) return '';
@@ -1601,7 +1616,7 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
         <button class="icon-btn" data-close aria-label="Close">${ICON.close}</button>
       </header>
       <div class="pick-body">${current ? `<div class="pick-current">${portrait(current, 40)}<span class="pname"><small>Current pick</small><strong>${esc(current.name)}</strong></span>
-        <button class="btn small secondary" data-remove>Remove</button></div>` : ''}${searchBox}<div id="pick-favs"><p class="muted small">Loading favourites…</p></div></div>`;
+        <button class="btn small secondary" data-remove>Remove</button></div>` : ''}${searchBox}<div id="pick-favs"><p class="muted small">Loading suggestions…</p></div></div>`;
     if (!dialog.open) dialog.showModal();
     const myActive = active;
     const favs = await favouritesHtml(sheet);

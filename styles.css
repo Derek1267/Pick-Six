@@ -419,7 +419,11 @@ button.spot.empty:hover, button.spot.empty:focus-visible { border-style: solid; 
 .ye-group { margin-bottom: 1.8rem; }
 .ye-group > h3 { font-size: 1.6rem; margin-bottom: .8rem; }
 .ye-grid { display: grid; gap: 1rem; }
-.ye-grid.tiles { grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); }
+.ye-grid.tiles { display: flex; flex-wrap: wrap; justify-content: center; }
+/* three across, same width whether a set has 2 or 3 teams; a set of 2 sits centred */
+.ye-grid.tiles > .roster { flex: 0 0 calc((100cqi - 2rem) / 3); min-width: 0; }
+@container (max-width: 900px) { .ye-grid.tiles > .roster { flex-basis: calc((100cqi - 1rem) / 2); } }
+@container (max-width: 600px) { .ye-grid.tiles > .roster { flex-basis: 100%; } }
 .ye-grid .roster { margin: 0; }
 .roster.ye { padding: .9rem 1rem 1rem; }
 .roster.ye .roster-head { margin-bottom: .7rem; }
