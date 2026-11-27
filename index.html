@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Pick Six</title>
-  <meta name="description" content="Make a private league, pick winners every week from the real NFL schedule, and climb the leaderboard.">
+  <meta name="description" content="Make a private league, pick winners from real NFL, NBA, NHL and MLB schedules, and climb the leaderboard.">
   <meta name="theme-color" content="#1e1036">
   <link rel="icon" type="image/svg+xml" href="logo.svg">
   <link rel="apple-touch-icon" href="logo.svg">
@@ -24,6 +24,7 @@
       <span class="brand-name">Pick&nbsp;Six</span>
     </a>
     <div class="topbar-right">
+      <button class="theme-toggle" id="help-btn" type="button" aria-label="What is Pick Six?" title="What is Pick Six?"></button>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Light / dark mode"></button>
       <nav id="account" class="account"></nav>
     </div>
@@ -38,6 +39,8 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <dialog id="manage-dialog" class="dialog" aria-label="Manage league"></dialog>
+  <dialog id="pick-dialog" class="dialog pick" aria-label="Make a pick"></dialog>
+  <dialog id="intro-dialog" class="dialog intro" aria-labelledby="intro-title"></dialog>
 
   <dialog id="name-dialog" class="dialog">
     <form method="dialog" id="name-form">

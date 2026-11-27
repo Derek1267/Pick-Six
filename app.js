@@ -10,6 +10,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 import * as BR from './bracket.js';
 import * as SEL from './selections.js';
+import { ICON, CAT_ICON, SURFACE, ILLO } from './icons.js';
+import { STAFF, STAFF_ROLE } from './staff.js';
+import { FAVOURITES, FAVOURITES_AS_OF } from './favourites.js';
 
 const app = document.getElementById('app');
 const accountNav = document.getElementById('account');
@@ -107,12 +110,62 @@ async function getLeagueBundle(id) {
   return bundle;
 }
 
+// A tiny IndexedDB store: season schedules are too big for localStorage, and keeping them
+// on the device means a returning visit draws straight away instead of re-downloading.
+const idb = (() => {
+  let dbp;
+  const open = () => (dbp ||= new Promise((resolve) => {
+    try {
+      const req = indexedDB.open('pick-six', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('kv');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  }));
+  const run = async (mode, fn) => {
+    const db = await open();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('kv', mode);
+        const req = fn(tx.objectStore('kv'));
+        req.onsuccess = () => resolve(req.result ?? null);
+        req.onerror = () => resolve(null);
+      } catch { resolve(null); }
+    });
+  };
+  return { get: (k) => run('readonly', (st) => st.get(k)), set: (k, v) => run('readwrite', (st) => st.put(v, k)) };
+})();
+
+const inflight = new Map(); // one request per key at a time (the page and the prefetch share it)
+const once = (key, fn) => {
+  if (!inflight.has(key)) inflight.set(key, fn().finally(() => inflight.delete(key)));
+  return inflight.get(key);
+};
+
+const DEVICE_TTL = 6 * 36e5; // a stored schedule is good for drawing; live games are re-checked anyway
+
 async function getGames(sport, season) {
   const key = `${sport}:${season}`;
   const hit = cache.games.get(key);
   if (fresh(hit, GAMES_TTL)) return hit.data;
+  if (!hit) {
+    const stored = await idb.get(`games:${key}`);
+    if (stored && Date.now() - stored.at < DEVICE_TTL) {
+      cache.games.set(key, stored);
+      once(`games:${key}`, () => reloadGames(sport, season)).catch(() => {}); // refresh behind the scenes
+      return refreshLiveGames(sport, season);
+    }
+  }
+  return once(`games:${key}`, () => reloadGames(sport, season));
+}
+
+async function reloadGames(sport, season) {
+  const key = `${sport}:${season}`;
   const data = await loadGames(sport, season);
-  cache.games.set(key, { at: Date.now(), data });
+  const entry = { at: Date.now(), data };
+  cache.games.set(key, entry);
+  idb.set(`games:${key}`, entry);
   return data;
 }
 
@@ -131,17 +184,17 @@ async function refreshLiveGames(sport, season) {
   return hit.data;
 }
 
-// Supabase returns at most 1,000 rows per request — page through a season.
+// Supabase returns at most 1,000 rows per request: get the count with the first page,
+// then fetch the rest of the season's pages at the same time.
 async function loadGames(sport, season) {
-  const all = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await sb.from('games').select('*').eq('sport', sport).eq('season', season)
-      .order('start_time').order('id').range(from, from + 999);
-    if (error) throw error;
-    all.push(...data);
-    if (data.length < 1000) break;
-  }
-  return all;
+  const page = (from, count) => sb.from('games').select('*', count ? { count: 'exact' } : undefined)
+    .eq('sport', sport).eq('season', season).order('start_time').order('id').range(from, from + 999);
+  const first = await page(0, true);
+  if (first.error) throw first.error;
+  const total = first.count ?? first.data.length;
+  const rest = await Promise.all(Array.from({ length: Math.max(0, Math.ceil(total / 1000) - 1) }, (_, i) => page((i + 1) * 1000)));
+  for (const r of rest) if (r.error) throw r.error;
+  return [...first.data, ...rest.flatMap((r) => r.data)];
 }
 
 function fmtKickoff(iso) {
@@ -199,10 +252,11 @@ async function render() {
   const myRender = ++state.renderId;
   const stale = () => myRender !== state.renderId; // a newer render started
 
-  app.classList.remove('wide');
   if (!configured) return renderSetupNeeded();
 
   const route = parseRoute();
+  app.classList.toggle('league-page', route.name === 'league' && !!state.session);
+  if (route.name !== 'league') delete app.dataset.league;
   if (route.name === 'join') localStorage.setItem(JOIN_KEY, route.code);
   if (route.name === 'how') {
     if (state.session && !state.profile) await loadProfile();
@@ -416,7 +470,7 @@ function renderHow() {
       <h1>How Pick Six works</h1>
 
       <section class="card">
-        <h2>Leagues</h2>
+        <h2 class="icon-head">${ICON.users}Leagues</h2>
         <ul>
           <li>Start a private league for one sport (NFL, NBA, NHL or MLB) and share the invite link or 6-letter code.</li>
           <li>Only people in your league can see it, its picks or its standings.</li>
@@ -425,7 +479,7 @@ function renderHow() {
       </section>
 
       <section class="card">
-        <h2>Making picks</h2>
+        <h2 class="icon-head">${ICON.picks}Making picks</h2>
         <ul>
           <li><strong>NFL</strong>: pick every game, week by week. <strong>NBA, NHL, MLB</strong>: pick day by day, because they play almost every night.</li>
           <li>Tap a team to pick it. You can change your mind as often as you like until that game starts.</li>
@@ -435,7 +489,7 @@ function renderHow() {
       </section>
 
       <section class="card">
-        <h2>Scoring &amp; standings</h2>
+        <h2 class="icon-head">${ICON.board}Scoring &amp; standings</h2>
         <ul>
           <li>1 point for every correct pick. Ties and postponed games don't count either way.</li>
           <li><strong>Standings</strong> rank by total correct picks, then win percentage.</li>
@@ -445,7 +499,7 @@ function renderHow() {
       </section>
 
       <section class="card">
-        <h2>Brackets</h2>
+        <h2 class="icon-head">${ICON.bracket}Brackets</h2>
         <ul>
           <li>The <strong>Bracket</strong> tab shows the playoff picture with the final in the middle.</li>
           <li>During the season the seeds are "if the season ended today" and your bracket is just for practice.
@@ -459,7 +513,7 @@ function renderHow() {
       </section>
 
       <section class="card">
-        <h2>Predictions</h2>
+        <h2 class="icon-head">${ICON.predict}Predictions</h2>
         <ul>
           <li><strong>Final standings:</strong> rank every team in each conference. 3 points for the exact spot and 1 for one spot off, scored live against today's standings.</li>
           <li><strong>Awards:</strong> MVPs, rookies, trophies, coaches and executives (pick the team), playoff MVPs and more. 3 points each.</li>
@@ -470,7 +524,7 @@ function renderHow() {
       </section>
 
       <section class="card">
-        <h2>Signing in</h2>
+        <h2 class="icon-head">${ICON.lock}Signing in</h2>
         <ul>
           <li>Use <strong>Continue with Google</strong>, or get a sign-in link by email. There's no password.</li>
           <li>If Google sign-in won't open from a chat app (like Instagram or Messenger), open the link in Safari or Chrome instead.</li>
@@ -510,7 +564,7 @@ async function renderHome(stale) {
       <h1>Your leagues</h1>
     </section>
     ${leagues.length ? `<div class="league-list">${cards}</div>` : `
-      <div class="empty card">
+      <div class="empty card illustrated">${ILLO.leagues}
         <p><strong>No leagues yet.</strong> Start one and send the invite link to your group chat,
         or join with a code a friend sent you.</p>
       </div>`}
@@ -559,65 +613,35 @@ async function renderHome(stale) {
 
 async function renderLeague(route, stale, { quiet = false } = {}) {
   const cached = fresh(cache.leagues.get(route.id), LEAGUE_TTL);
-  if (!quiet && !cached) app.innerHTML = '<div class="loading">Loading league…</div>';
+  // Same league, new tab: keep the title band where it is and only swap the page under it.
+  const keepBand = app.dataset.league === route.id && !!app.querySelector('.band');
+  if (keepBand) {
+    paintTabs(route);
+    if (!quiet) app.querySelector('.page').innerHTML = pageLoading(route);
+  } else if (!quiet && !cached) {
+    app.innerHTML = '<div class="loading">Loading league…</div>';
+  }
 
   const bundle = await getLeagueBundle(route.id);
   if (stale()) return;
   const league = bundle?.league;
   if (!league) {
+    delete app.dataset.league;
     app.innerHTML = `<section class="card narrow"><h2>League not found</h2>
       <p>You may not be a member yet. Ask the owner for an invite link.</p><a class="btn" href="#/">Back to your leagues</a></section>`;
     return;
   }
 
   const members = bundle.members.map((m) => ({ ...m }));
-  const needsGames = route.tab === 'picks' || route.tab === 'bracket';
-  let games = [];
-  if (needsGames) {
-    try {
-      games = quiet ? await refreshLiveGames(league.sport, league.season) : await getGames(league.sport, league.season);
-    } catch { games = []; }
-  }
-  if (stale()) return;
-  app.classList.toggle('wide', route.tab === 'bracket' || (route.tab === 'predict' && route.sub === 'allstars'));
-
-  const tab = (key, label, extra = '') => `<a href="#/league/${league.id}${key === 'picks' ? '' : `?tab=${key}`}${extra}"
-    class="${route.tab === key ? 'on' : ''}" ${route.tab === key ? 'aria-current="page"' : ''}>${label}</a>`;
-  const head = `
-    <header class="band">
-      <div class="band-inner">
-        <a href="#/" class="band-back">Your leagues</a>
-        <div class="band-row">
-          <div class="band-id">
-            <h1 class="band-title">${esc(league.name)}</h1>
-            <p class="band-meta"><span class="sport-badge">${esc(sportInfo(league.sport).name)}</span>
-              <span>${members.length} player${members.length === 1 ? '' : 's'}</span>
-              <span>Code <strong class="code">${esc(league.invite_code)}</strong></span></p>
-          </div>
-          <div class="band-actions">
-            <button class="btn small on-dark" id="invite-btn">Invite friends</button>
-            <button class="btn small ghost on-dark" id="manage-btn">Manage</button>
-          </div>
-        </div>
-        <nav class="band-tabs" aria-label="League">
-          ${tab('picks', 'Picks')}${tab('leaderboard', 'Leaderboard')}${tab('bracket', 'Bracket')}${tab('predict', 'Predictions')}
-        </nav>
-      </div>
-    </header>`;
-
-  let body;
-  if (route.tab === 'leaderboard') body = await standingsHtml(league, members, games);
-  else if (route.tab === 'bracket') body = '<div id="bracket-root"><div class="loading">Loading bracket…</div></div>';
-  else if (route.tab === 'predict') body = `${predictionsNav(league, route)}<div id="predict-root"><div class="loading">Loading…</div></div>`;
-  else body = await picksHtml(league, members, games, route);
-  if (stale()) return;
-
-  app.innerHTML = head + `<div class="page">${body}</div>`;
   state.league = league;
-
-  const sel = document.getElementById('week-select');
-  if (sel) sel.onchange = () => go(`#/league/${league.id}?week=${sel.value}`);
-
+  if (!keepBand) {
+    app.innerHTML = bandHtml(league, members, route) + `<div class="page">${pageLoading(route)}</div>`;
+    app.dataset.league = league.id;
+    paintTabs(route);
+  } else {
+    app.querySelector('.band-players').textContent = `${members.length} player${members.length === 1 ? '' : 's'}`;
+    app.querySelector('.band-title').textContent = league.name;
+  }
   document.getElementById('manage-btn').onclick = () => openManage(league, members);
   document.getElementById('invite-btn').onclick = async () => {
     const link = inviteLink(league.invite_code);
@@ -628,6 +652,29 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
     try { await navigator.clipboard.writeText(link); toast('Invite link copied. Paste it in your group chat.', 'good'); }
     catch { toast(link); }
   };
+
+  const needsGames = route.tab === 'picks' || route.tab === 'bracket';
+  let games = [];
+  if (needsGames) {
+    try {
+      games = quiet ? await refreshLiveGames(league.sport, league.season) : await getGames(league.sport, league.season);
+    } catch { games = []; }
+  }
+  if (stale()) return;
+
+  const page = app.querySelector('.page');
+  let body;
+  if (route.tab === 'leaderboard') body = await standingsHtml(league, members, games);
+  else if (route.tab === 'bracket') body = '<div id="bracket-root"><div class="loading">Loading bracket…</div></div>';
+  else if (route.tab === 'predict') body = `${predictionsNav(league, route)}<div id="predict-root">${skeleton()}</div>`;
+  else body = await picksHtml(league, members, games, route);
+  if (stale()) return;
+  page.innerHTML = body;
+
+  const sel = document.getElementById('week-select');
+  if (sel) sel.onchange = () => go(`#/league/${league.id}?week=${sel.value}`);
+
+  prefetchLeague(league); // warm the other tabs while you look at this one
 
   if (route.tab === 'bracket') {
     await mountBracket(league, members, games, stale, route);
@@ -649,6 +696,56 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
       }
     }, 60_000);
   }
+}
+
+const LEAGUE_TABS = [
+  ['picks', 'Picks', 'picks'], ['leaderboard', 'Leaderboard', 'board'], ['bracket', 'Bracket', 'bracket'], ['predict', 'Predictions', 'predict'],
+];
+
+function bandHtml(league, members, route) {
+  return `
+    <header class="band">
+      <div class="band-inner">
+        <a href="#/" class="band-back">${ICON.back}Your leagues</a>
+        <div class="band-row">
+          <div class="band-id">
+            <h1 class="band-title">${esc(league.name)}</h1>
+            <p class="band-meta"><span class="sport-badge">${esc(sportInfo(league.sport).name)}</span>
+              <span class="band-stat">${ICON.users}<span class="band-players">${members.length} player${members.length === 1 ? '' : 's'}</span></span>
+              <span class="band-stat">Code <strong class="code">${esc(league.invite_code)}</strong></span></p>
+          </div>
+          <div class="band-actions">
+            <button class="btn small on-dark" id="invite-btn">${ICON.share}Invite friends</button>
+            <button class="btn small ghost on-dark" id="manage-btn">${ICON.gear}Manage</button>
+          </div>
+        </div>
+        <nav class="band-tabs" aria-label="League">
+          ${LEAGUE_TABS.map(([key, label, icon]) => `<a data-tab="${key}" href="#/league/${league.id}${key === 'picks' ? '' : `?tab=${key}`}">${ICON[icon]}<span>${label}</span></a>`).join('')}
+        </nav>
+      </div>
+    </header>`;
+}
+
+function paintTabs(route) {
+  for (const a of app.querySelectorAll('.band-tabs a')) {
+    const on = a.dataset.tab === route.tab;
+    a.classList.toggle('on', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+}
+
+// Placeholder shapes while a tab loads, so the page doesn't jump.
+const skeleton = (n = 6) => `<div class="skeleton" aria-label="Loading">${'<span></span>'.repeat(n)}</div>`;
+const pageLoading = (route) => (route.tab === 'predict' && state.league
+  ? `${predictionsNav(state.league, route)}<div id="predict-root">${skeleton()}</div>` : skeleton());
+
+// Fetch what the other tabs need once the browser is idle, so switching tabs is instant.
+function prefetchLeague(league) {
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 400));
+  idle(() => {
+    getGames(league.sport, league.season).catch(() => {});
+    getTeams(league.sport).catch(() => {});
+  });
 }
 
 // A slate = the set of games you pick together: an NFL week, or one day for NBA/NHL/MLB.
@@ -690,8 +787,8 @@ async function picksHtml(league, members, games, route) {
   const weeks = groupSlates(games, league.sport);
   const unit = sportInfo(league.sport).unit;
   if (!weeks.length) {
-    return `<div class="empty card"><p><strong>No games loaded yet.</strong>
-      Run the "Sync games" GitHub Action (with "Load whole seasons" ticked) to pull in the schedule.</p></div>`;
+    return `<div class="empty card illustrated">${ILLO.picks}<p><strong>No games loaded yet.</strong>
+      The schedule shows up here after the next sync.</p></div>`;
   }
 
   const key = weeks.some((w) => w.key === route.week) ? route.week : defaultSlate(weeks, league.sport);
@@ -881,6 +978,7 @@ async function standingsHtml(league, members) {
     : '<li class="muted">Weekly winners show up once games go final.</li>';
 
   return `
+    <div class="board-grid">
     <div class="card flush">
       <table class="standings">
         <thead><tr><th>#</th><th>Player</th><th class="num">W</th><th class="num">L</th><th class="num">Pct</th><th class="num" title="Weeks won">Wk wins</th></tr></thead>
@@ -888,9 +986,10 @@ async function standingsHtml(league, members) {
       </table>
     </div>
     <section class="card">
-      <h2>Weekly winners</h2>
+      <h2 class="icon-head">${ICON.trophy}Weekly winners</h2>
       <ul class="weekly">${weeklyHtml}</ul>
-    </section>`;
+    </section>
+    </div>`;
 }
 
 // ----- Manage league dialog -----
@@ -1019,11 +1118,19 @@ async function fetchPlayers(ids) {
 }
 
 async function getTeams(sport) {
-  if (!teamsCache.has(sport)) {
+  if (teamsCache.has(sport)) return teamsCache.get(sport);
+  const load = () => once(`teams:${sport}`, async () => {
     const { data } = await sb.from('teams').select('abbr, name, logo, conference, division, wins, losses, ties').eq('sport', sport);
-    teamsCache.set(sport, data || []);
+    if (data?.length) { teamsCache.set(sport, data); idb.set(`teams:${sport}`, { at: Date.now(), data }); }
+    return data || [];
+  });
+  const stored = await idb.get(`teams:${sport}`);
+  if (stored?.data?.length && Date.now() - stored.at < DEVICE_TTL) {
+    teamsCache.set(sport, stored.data);
+    if (Date.now() - stored.at > 30 * 6e4) load().catch(() => {}); // records move: refresh quietly
+    return stored.data;
   }
-  return teamsCache.get(sport);
+  return load();
 }
 
 async function searchPlayers(sport, term, teamAbbrs) {
@@ -1069,6 +1176,35 @@ function entityChip(id, teams, verdict = null) {
 
 // ----- Shared engine for awards, All-Stars and year-end teams -----------------
 
+const sheetCache = new Map(); // `${league}|${kind}` → { picks, settings, at } — drawn instantly, refreshed behind
+const favCache = new Map();   // `${sport}:${name}` → player row (or null when not in the players table)
+
+// "Giannis Antetokounmpo" → ['Giannis', 'Antetokounmpo']; suffixes stay with the last name.
+function splitName(name) {
+  const w = String(name).trim().split(/\s+/);
+  if (w.length === 1) return ['', w[0]];
+  let last = w.pop();
+  if (/^(jr\.?|sr\.?|ii|iii|iv)$/i.test(last) && w.length > 1) last = `${w.pop()} ${last}`;
+  return [w.join(' '), last];
+}
+const TWO_WORD_NICKS = ['Trail Blazers', 'Red Sox', 'White Sox', 'Blue Jays', 'Maple Leafs', 'Red Wings', 'Blue Jackets', 'Golden Knights'];
+function splitTeam(name) {
+  const two = TWO_WORD_NICKS.find((n) => name.endsWith(` ${n}`));
+  if (two) return [name.slice(0, -two.length - 1), two];
+  return splitName(name);
+}
+const nameLines = (e) => (e.kind === 'team' ? splitTeam(e.name) : e.kind === 'custom' ? ['', e.name] : splitName(e.name));
+
+async function favouritePlayers(sport, names) {
+  const missing = names.filter((n) => !favCache.has(`${sport}:${n}`));
+  if (missing.length) {
+    const { data } = await sb.from('players').select('id, name, team_abbr, position, headshot').eq('sport', sport).in('name', missing);
+    for (const n of missing) favCache.set(`${sport}:${n}`, null);
+    for (const p of data || []) { favCache.set(`${sport}:${p.name}`, p); playerCache.set(p.id, p); }
+  }
+  return names.map((n) => favCache.get(`${sport}:${n}`) || { id: `custom:${n}`, name: n, team_abbr: '', position: '' });
+}
+
 async function mountSheets(root, league, members, stale, { sheets: defs, kind }) {
   const me = state.session.user.id;
   const isOwner = league.created_by === me;
@@ -1076,28 +1212,40 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
   const prefix = kind === 'awards' ? `${sport}:` : `${sport}:team:`;
   const sheets = defs.map((d) => ({ ...d, qid: `${prefix}${d.id}`, size: SEL.slotCount(d) }));
   const qids = sheets.map((s) => s.qid);
+  const cacheKey = `${league.id}|${kind}`;
+  const dialog = document.getElementById('pick-dialog');
 
-  const [picksRes, settingsRes, teams] = await Promise.all([
-    sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id).in('question_id', qids),
-    sb.from('award_settings').select('question_id, locked_at, answers').eq('league_id', league.id).in('question_id', qids),
-    getTeams(sport),
-  ]);
+  const fetchAll = async () => {
+    const [picksRes, settingsRes] = await Promise.all([
+      sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id).in('question_id', qids),
+      sb.from('award_settings').select('question_id, locked_at, answers').eq('league_id', league.id).in('question_id', qids),
+    ]);
+    const data = { picks: picksRes.data || [], settings: settingsRes.data || [], at: Date.now() };
+    await fetchPlayers([...data.picks.flatMap((r) => r.players || []), ...data.settings.flatMap((r) => r.answers || [])]);
+    sheetCache.set(cacheKey, data);
+    return data;
+  };
+
+  const cached = sheetCache.get(cacheKey);
+  const [first, teams] = await Promise.all([cached || fetchAll(), getTeams(sport)]);
   if (stale()) return;
 
-  const picksByUser = new Map([[me, new Map()]]);
-  const setRows = (rows) => {
-    for (const r of rows || []) {
+  const picksByUser = new Map();
+  let settings = new Map();
+  const apply = (data) => {
+    picksByUser.clear();
+    picksByUser.set(me, new Map());
+    for (const r of data.picks) {
       if (!picksByUser.has(r.user_id)) picksByUser.set(r.user_id, new Map());
       picksByUser.get(r.user_id).set(r.question_id, r.players || []);
     }
+    settings = new Map(data.settings.map((r) => [r.question_id, r]));
   };
-  setRows(picksRes.data);
-  const settings = new Map((settingsRes.data || []).map((r) => [r.question_id, r]));
-  await fetchPlayers([
-    ...[...picksByUser.values()].flatMap((m) => [...m.values()].flat()),
-    ...[...settings.values()].flatMap((r) => r.answers || []),
-  ]);
-  if (stale()) return;
+  apply(first);
+  const remember = () => sheetCache.set(cacheKey, {
+    picks: [...picksByUser].flatMap(([user_id, m]) => [...m].map(([question_id, players]) => ({ user_id, question_id, players }))),
+    settings: [...settings.values()], at: Date.now(),
+  });
 
   const pad = (arr, n) => Array.from({ length: n }, (_, i) => (arr || [])[i] || '');
   const mine = (sheet) => pad(picksByUser.get(me).get(sheet.qid), sheet.size);
@@ -1111,8 +1259,10 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
       && (f.division ? (t.division || '').toLowerCase().includes(f.division.toLowerCase()) : true));
     return list.length ? list : teams;
   };
+  const staffRole = (sheet) => STAFF_ROLE[sheet.qid];
+  const staffName = (sheet, abbr) => { const r = staffRole(sheet); return r ? STAFF[sport]?.[abbr]?.[r] || '' : ''; };
 
-  let active = null;     // { qid, flat, mode: 'pick' | 'answer' }
+  let active = null;     // { qid, flat, mode: 'pick' | 'answer' } — the spot being filled in the popup
   let resultsFor = null; // qid the owner is entering results for
   let ownerMode = false; // owner controls stay out of the way until asked for
   let side = sheets[0]?.qid; // All-Stars: which conference/division is showing
@@ -1120,6 +1270,7 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
 
   const save = async (sheet, arr) => {
     picksByUser.get(me).set(sheet.qid, arr);
+    remember();
     const res = arr.some(Boolean)
       ? await sb.from('award_picks').upsert({ league_id: league.id, user_id: me, question_id: sheet.qid, players: arr },
         { onConflict: 'league_id,user_id,question_id' })
@@ -1135,11 +1286,8 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     }, { onConflict: 'league_id,question_id' });
     if (error) { toast(friendlyError(error), 'error'); return; }
     settings.set(sheet.qid, next);
-    if ('locked_at' in patch) { // locking reveals everyone's picks
-      const { data } = await sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id).in('question_id', qids);
-      setRows(data);
-      await fetchPlayers((data || []).flatMap((r) => r.players || []));
-    }
+    remember();
+    if ('locked_at' in patch) apply(await fetchAll()); // locking reveals everyone's picks
   };
 
   // Players already used on this sheet, or on sheets in the same group (All-NBA 1st/2nd/3rd…).
@@ -1152,57 +1300,62 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
   // ----- pieces -----
   const statusOf = (sheet) => (answerSet(sheet).size ? ['done', 'Results in'] : isOpen(sheet) ? ['open', 'Open'] : ['locked', 'Locked']);
 
-  // One spot on a roster or award. Filled spots show the player; empty ones are a button.
-  const slot = (sheet, flat, value, mode, editable, size) => {
-    const label = SEL.slotLabel(sheet, flat);
-    const isActive = active && active.qid === sheet.qid && active.flat === flat && active.mode === mode;
+  // One spot: a fixed-shape card (position, picture, first name, last name, detail) so every
+  // card in a row is the same size whether it's filled or not.
+  const slot = (sheet, flat, value, mode, editable, size = 'big') => {
+    const label = SEL.slotLabel(sheet, flat) || '';
+    const pos = `<span class="spot-pos">${esc(label)}</span>`;
     if (value) {
       const e = entityOf(value, teams);
       const verdict = mode === 'pick' && answerSet(sheet).size ? answerSet(sheet).has(value) : null;
-      return `<div class="spot ${size} filled ${verdict === true ? 'hit' : verdict === false ? 'miss' : ''}">
-        ${label ? `<span class="spot-label">${esc(label)}</span>` : ''}
-        ${portrait(e, size === 'big' ? 56 : 32)}
-        <span class="spot-name">${esc(e.name)}</span>
-        ${e.sub ? `<span class="spot-sub">${esc(e.sub)}</span>` : ''}
-        ${editable ? `<button class="spot-x" data-clear="${flat}" data-mode="${mode}" data-q="${sheet.qid}" aria-label="Remove ${esc(e.name)}">×</button>` : ''}
+      const [firstLine, lastLine] = nameLines(e);
+      const sub = e.kind === 'team' ? (staffName(sheet, e.team?.abbr) || recordText(e.team)) : e.sub;
+      const tap = editable ? ` role="button" tabindex="0" data-open="${flat}" data-mode="${mode}" data-q="${sheet.qid}" aria-label="Change ${esc(e.name)}"` : '';
+      return `<div class="spot ${size} filled ${editable ? 'tappable' : ''} ${verdict === true ? 'hit' : verdict === false ? 'miss' : ''}"${tap}>
+        ${pos}${portrait(e, size === 'big' ? 52 : 40)}
+        <span class="spot-first" style="--len:${Math.max(firstLine.length, 6)}">${esc(firstLine)}</span>
+        <span class="spot-last" style="--len:${Math.max(lastLine.length, 6)}">${esc(lastLine)}</span>
+        <span class="spot-sub">${esc(sub || '')}</span>
+        ${editable ? `<button class="spot-x" data-clear="${flat}" data-mode="${mode}" data-q="${sheet.qid}" aria-label="Remove ${esc(e.name)}">${ICON.close}</button>` : ''}
       </div>`;
     }
-    if (!editable) return `<div class="spot ${size} empty">${label ? `<span class="spot-label">${esc(label)}</span>` : ''}<span class="spot-none">No pick</span></div>`;
-    const what = sheet.pick === 'team' ? 'Choose team' : label ? `Add ${label.toLowerCase()}` : 'Add player';
-    return `<button class="spot ${size} empty ${isActive ? 'active' : ''}" data-open="${flat}" data-mode="${mode}" data-q="${sheet.qid}">
-      ${label ? `<span class="spot-label">${esc(label)}</span>` : ''}<span class="spot-add">${esc(what)}</span></button>`;
+    if (!editable) return `<div class="spot ${size} empty">${pos}<span class="spot-plus none"></span><span class="spot-add muted">No pick</span></div>`;
+    const what = sheet.pick === 'team' ? 'Choose team' : 'Add player';
+    return `<button class="spot ${size} empty" data-open="${flat}" data-mode="${mode}" data-q="${sheet.qid}" aria-label="${esc(`${what}${label ? ` (${label})` : ''}`)}">
+      ${pos}<span class="spot-plus">${ICON.plus}</span><span class="spot-add">${esc(what)}</span></button>`;
   };
 
-  const drawer = (sheet) => {
-    if (sheet.pick === 'team') {
-      const used = usedIds(sheet, active.mode);
-      return `<div class="drawer"><div class="team-pick">${teamsFor(sheet).slice().sort((a, b) => a.name.localeCompare(b.name)).map((t) => `
-        <button class="tpick" data-choose="team:${esc(t.abbr)}" ${used.has(`team:${t.abbr}`) ? 'disabled' : ''}>${teamLogo(t, 26)}<span>${esc(t.name)}</span></button>`).join('')}
-      </div><button class="link small" data-close>Cancel</button></div>`;
-    }
-    const f = sheet.filter;
-    return `<div class="drawer">
-      <div class="drawer-row"><input type="search" id="sheet-search" autocomplete="off"
-        placeholder="Search ${esc(f?.conference || f?.division || sportInfo(sport).name)} players" aria-label="Search players">
-        <button class="link small" data-close>Cancel</button></div>
-      <div class="search-results" role="listbox" id="sheet-results"></div>
-    </div>`;
-  };
-
-  // A section of spots; the search drawer opens under the section being filled.
+  // Rows for a plain section: same card width everywhere, rows centred, no lonely last card.
+  const perRow = (n, max) => (n <= max ? n : Math.ceil(n / Math.ceil(n / max)));
   const sectionBlock = (sheet, sIdx, values, mode, editable) => {
     const section = sheet.sections[sIdx];
     const start = SEL.slotIndex(sheet, sIdx, 0);
     const size = section.size === 'big' ? 'big' : 'small';
     const spots = Array.from({ length: section.n }, (_, i) => slot(sheet, start + i, values[start + i], mode, editable, size)).join('');
-    const showDrawer = active && active.qid === sheet.qid && active.mode === mode && active.flat >= start && active.flat < start + section.n;
     return `
       <section class="roster-section ${section.kind || ''}">
         ${sheet.size > 1 ? `<h4>${esc(section.label)}</h4>` : ''}
-        <div class="spots ${size} n${section.n}">${spots}</div>
-        ${showDrawer ? drawer(sheet) : ''}
+        <div class="spots ${size}" style="--per:${perRow(section.n, 7)};--per-m:${perRow(section.n, 4)}">${spots}</div>
       </section>`;
   };
+
+  // Position layout drawn on a court / rink / field / diamond.
+  const surfaceBlock = (sheet, values, mode, editable) => sheet.layout.groups.map((g) => {
+    const cols = g.rows[0].length;
+    const cells = (row) => row.map((f) => (f === null ? '<span class="cell"></span>'
+      : `<span class="cell">${slot(sheet, f, values[f], mode, editable, 'big')}</span>`)).join('');
+    return `
+      <section class="surface-block">
+        ${g.title ? `<h4>${esc(g.title)}</h4>` : ''}
+        <div class="surface-scroll"><div class="surface-inner" style="--cols:${cols}">
+          <div class="surface s-${sheet.layout.surface}">
+            ${SURFACE[sheet.layout.surface]}
+            <div class="formation">${g.rows.map((r) => `<div class="frow">${cells(r)}</div>`).join('')}</div>
+          </div>
+          ${g.bench ? `<div class="bench"><h5>Backups</h5>${g.bench.map((r) => `<div class="frow">${cells(r)}</div>`).join('')}</div>` : ''}
+        </div></div>
+      </section>`;
+  }).join('');
 
   const ownerTools = (sheet) => {
     if (!isOwner || !ownerMode) return '';
@@ -1233,10 +1386,13 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     const values = entering ? answers(sheet) : mine(sheet);
     const editable = entering || isOpen(sheet);
     const mode = entering ? 'answer' : 'pick';
+    const drawn = SEL.laidOut(sheet);
+    const plain = sheet.sections.map((s, i) => i).filter((i) => !drawn.has(SEL.slotIndex(sheet, i, 0)));
     return `
       ${entering ? '<p class="note">Fill in the real result. Saving locks this and scores everyone.</p>' : ''}
-      ${sheet.sections.map((_, i) => sectionBlock(sheet, i, values, mode, editable)).join('')}
-      ${!entering && answerSet(sheet).size ? `<p class="note">${[...answerSet(sheet)].length} real picks entered. Green spots made it.</p>` : ''}
+      ${sheet.layout ? surfaceBlock(sheet, values, mode, editable) : ''}
+      ${plain.map((i) => sectionBlock(sheet, i, values, mode, editable)).join('')}
+      ${!entering && answerSet(sheet).size ? `<p class="note">${answerSet(sheet).size} real picks entered. Green spots made it.</p>` : ''}
       ${everyone(sheet)}
       ${ownerTools(sheet)}`;
   };
@@ -1254,19 +1410,19 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
   const hidden = isOwner
     ? 'Picks stay hidden until you lock them.'
     : 'Picks stay hidden until the league owner locks them.';
-  const ownerToggle = () => (isOwner ? `<p class="owner-switch"><button class="link small" data-ownermode>${ownerMode
-    ? 'Hide owner controls' : 'Owner controls: lock picks and enter results'}</button></p>` : '');
+  const intro = (iconName, text) => `
+    <div class="tab-intro">${ICON[iconName]}<p>${text} ${hidden}</p>
+      ${isOwner ? `<button class="btn small secondary" data-ownermode>${ICON.gear}${ownerMode ? 'Hide owner controls' : 'Owner controls'}</button>` : ''}</div>`;
 
   // ----- layouts -----
   const drawAwards = () => {
     const cats = [...new Set(sheets.map((s) => s.cat || 'season'))];
     return `
-      <p class="lede-sm">Call the winners: 3 points each. ${hidden}</p>
-      ${ownerToggle()}
+      ${intro('trophy', 'Call the winners: 3 points each.')}
       ${leaderboard()}
       ${cats.map((cat) => `
         <section class="award-cat">
-          <h3>${esc(SEL.AWARD_CATEGORIES[cat] || 'Awards')}</h3>
+          <h3 class="cat-head">${CAT_ICON[cat] || ICON.trophy}${esc(SEL.AWARD_CATEGORIES[cat] || 'Awards')}</h3>
           <div class="trophies">${sheets.filter((s) => (s.cat || 'season') === cat).map((sheet) => {
             const [cls, label] = statusOf(sheet);
             const entering = resultsFor === sheet.qid;
@@ -1274,12 +1430,14 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
             const real = answerSet(sheet);
             return `
               <article class="trophy ${cls} ${entering ? 'entering' : ''}">
-                <header><h4>${esc(sheet.title)}</h4>${sheet.note ? `<p>${esc(sheet.note)}</p>` : ''}<span class="pill ${cls}">${label}</span></header>
+                <header><h4>${esc(sheet.title)}</h4><p>${esc(sheet.note || '')}</p></header>
                 ${slot(sheet, 0, values[0], entering ? 'answer' : 'pick', entering || isOpen(sheet), 'big')}
-                ${active && active.qid === sheet.qid ? drawer(sheet) : ''}
-                ${real.size && !entering ? `<p class="winner">Winner: <strong>${esc(entityOf([...real][0], teams).name)}</strong></p>` : ''}
-                ${everyone(sheet)}
-                ${ownerTools(sheet)}
+                <footer>
+                  <span class="pill ${cls}">${label}</span>
+                  ${real.size && !entering ? `<span class="winner">Winner: <strong>${esc(entityOf([...real][0], teams).name)}</strong></span>` : ''}
+                  ${everyone(sheet)}
+                  ${ownerTools(sheet)}
+                </footer>
               </article>`;
           }).join('')}</div>
         </section>`).join('')}`;
@@ -1290,14 +1448,13 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     const [cls, label] = statusOf(sheet);
     const filled = mine(sheet).filter(Boolean).length;
     return `
-      <p class="lede-sm">Pick the full roster: 1 point for every player who makes it, injury replacements included. ${hidden}</p>
-      ${ownerToggle()}
+      ${intro('star', 'Pick the full roster: 1 point for every player who makes it, injury replacements included.')}
       ${leaderboard()}
       <div class="side-switch" role="tablist" aria-label="Choose a side">
         ${sheets.map((s) => `<button role="tab" aria-selected="${s.qid === sheet.qid}" class="${s.qid === sheet.qid ? 'on' : ''}" data-side="${s.qid}">
           ${esc(s.side)}<span class="count">${mine(s).filter(Boolean).length}/${s.size}</span></button>`).join('')}
       </div>
-      <article class="roster">
+      <article class="roster" style="--base:${Math.max(7, sheet.layout?.groups[0].rows[0].length || 0)}">
         <header class="roster-head"><h3>${esc(sheet.title)}</h3><span class="muted small">${filled} of ${sheet.size} picked</span><span class="pill ${cls}">${label}</span></header>
         ${rosterBody(sheet)}
       </article>`;
@@ -1306,30 +1463,102 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
   const drawYearEnd = () => {
     const headings = [...new Set(sheets.map((s) => s.heading))];
     return `
-      <p class="lede-sm">Name the year-end teams: 1 point for every player you get right. A player can only go on one team in each set. ${hidden}</p>
-      ${ownerToggle()}
+      ${intro('medal', 'Name the year-end teams: 1 point for every player you get right. A player can only go on one team in each set.')}
       ${leaderboard()}
       ${headings.map((h) => `
         <section class="ye-group">
-          <h3>${esc(h)}</h3>
+          <h3 class="cat-head">${ICON.medal}${esc(h)}</h3>
+          <div class="ye-grid ${['court', 'rink'].includes(sheets.find((s) => s.heading === h)?.layout?.surface) ? 'tiles' : ''}">
           ${sheets.filter((s) => s.heading === h).map((sheet) => {
             const [cls, label] = statusOf(sheet);
-            return `<article class="roster ye">
+            return `<article class="roster ye" style="--base:${Math.max(7, sheet.layout?.groups[0].rows[0].length || 0)}">
               <header class="roster-head"><h4>${esc(sheet.title)}</h4><span class="pill ${cls}">${label}</span></header>
               ${rosterBody(sheet)}
             </article>`;
           }).join('')}
+          </div>
         </section>`).join('')}`;
   };
 
   const draw = () => {
+    if (!document.body.contains(root)) return;
     root.innerHTML = kind === 'awards' ? drawAwards() : kind === 'allstars' ? drawAllStars() : drawYearEnd();
-    root.querySelector('#sheet-search')?.focus({ preventScroll: true });
   };
+
+  // ----- the pick popup -----
+  const pickRow = (id, e, sub, rank = null) => `
+    <button class="prow" data-choose="${esc(id)}">
+      <span class="prank">${rank || ''}</span>
+      ${portrait(e, 40)}
+      <span class="pname"><strong>${esc(e.name)}</strong><small>${esc(sub || '')}</small></span>
+      <span class="pgo">Pick</span>
+    </button>`;
+
+  const teamRow = (sheet, t, rank = null) => pickRow(`team:${t.abbr}`, { kind: 'team', name: t.name, team: t },
+    [staffName(sheet, t.abbr), recordText(t)].filter(Boolean).join(' · '), rank);
+
+  const favouritesHtml = async (sheet) => {
+    const used = usedIds(sheet, active.mode);
+    const awardId = sheet.qid.slice(prefix.length);
+    const curated = kind === 'awards' ? FAVOURITES[sport]?.[awardId] : null;
+    if (sheet.pick === 'team') {
+      const pool = teamsFor(sheet);
+      let list = curated ? curated.map((a) => pool.find((t) => t.abbr === a)).filter(Boolean) : [];
+      const title = list.length ? `Favourites <span class="muted">as of ${FAVOURITES_AS_OF}</span>` : 'Best records right now';
+      if (!list.length) {
+        const pctOf = (t) => { const gp = t.wins + t.losses + (t.ties || 0); return gp ? (t.wins + (t.ties || 0) / 2) / gp : 0; };
+        list = [...pool].sort((a, b) => pctOf(b) - pctOf(a) || b.wins - a.wins).slice(0, 5);
+      }
+      list = list.filter((t) => !used.has(`team:${t.abbr}`));
+      return `<h3 class="pick-sub">${ICON.star}${title}</h3>
+        <div class="plist">${list.map((t, i) => teamRow(sheet, t, i + 1)).join('')}</div>
+        <h3 class="pick-sub">${ICON.users}All teams</h3>
+        <div class="plist">${[...pool].sort((a, b) => a.name.localeCompare(b.name)).filter((t) => !used.has(`team:${t.abbr}`)).map((t) => teamRow(sheet, t)).join('')}</div>`;
+    }
+    if (!curated?.length) return '';
+    const allowed = sheet.filter ? new Set(teamsFor(sheet).map((t) => t.abbr)) : null;
+    const players = (await favouritePlayers(sport, curated))
+      .filter((p) => !used.has(p.id) && (!allowed || !p.team_abbr || allowed.has(p.team_abbr)));
+    if (!players.length) return '';
+    return `<h3 class="pick-sub">${ICON.star}Favourites <span class="muted">as of ${FAVOURITES_AS_OF}</span></h3>
+      <div class="plist">${players.slice(0, 5).map((p, i) => pickRow(p.id, { kind: 'player', name: p.name, headshot: p.headshot },
+        [p.team_abbr, p.position].filter(Boolean).join(' · '), i + 1)).join('')}</div>`;
+  };
+
+  const drawPicker = async () => {
+    const sheet = sheets.find((s) => s.qid === active?.qid);
+    if (!sheet) return;
+    const label = SEL.slotLabel(sheet, active.flat);
+    const sec = SEL.sectionOf(sheet, active.flat);
+    const heading = kind === 'awards' ? sheet.title : `${sheet.title}${label ? ` · ${label}` : sec && sheet.size > 1 ? ` · ${sec.label}` : ''}`;
+    const f = sheet.filter;
+    const currentId = (active.mode === 'answer' ? answers(sheet) : mine(sheet))[active.flat];
+    const current = currentId ? entityOf(currentId, teams) : null;
+    const searchBox = sheet.pick === 'team' ? '' : `
+      <label class="search-field">${ICON.search}<input type="search" id="sheet-search" autocomplete="off"
+        placeholder="Search ${esc(f?.conference || f?.division || sportInfo(sport).name)} players" aria-label="Search players"></label>
+      <div class="plist" role="listbox" id="sheet-results"></div>`;
+    dialog.innerHTML = `
+      <header class="pick-head">
+        <div><p class="pick-kicker">${active.mode === 'answer' ? 'Enter the real result' : 'Your pick'}</p><h2>${esc(heading)}</h2></div>
+        <button class="icon-btn" data-close aria-label="Close">${ICON.close}</button>
+      </header>
+      <div class="pick-body">${current ? `<div class="pick-current">${portrait(current, 40)}<span class="pname"><small>Current pick</small><strong>${esc(current.name)}</strong></span>
+        <button class="btn small secondary" data-remove>Remove</button></div>` : ''}${searchBox}<div id="pick-favs"><p class="muted small">Loading favourites…</p></div></div>`;
+    if (!dialog.open) dialog.showModal();
+    const myActive = active;
+    const favs = await favouritesHtml(sheet);
+    if (active !== myActive) return;
+    const box = dialog.querySelector('#pick-favs');
+    if (box) box.innerHTML = favs;
+    dialog.querySelector('#sheet-search')?.focus({ preventScroll: true });
+  };
+
+  const closePicker = () => { active = null; if (dialog.open) dialog.close(); };
 
   // ----- search -----
   const runSearch = async (input) => {
-    const box = root.querySelector('#sheet-results');
+    const box = dialog.querySelector('#sheet-results');
     const sheet = sheets.find((s) => s.qid === active?.qid);
     if (!box || !sheet) return;
     const term = input.value.trim();
@@ -1343,20 +1572,45 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     const fits = (p) => (fitsPos?.length ? fitsPos.includes(p.position) : true);
     found.sort((a, b) => (fits(b) - fits(a)) || (b.name.toLowerCase().startsWith(lower) - a.name.toLowerCase().startsWith(lower)));
     const exact = found.some((p) => p.name.toLowerCase() === lower);
-    box.innerHTML = found.slice(0, 8).map((p) => `
-      <button class="result ${fits(p) ? '' : 'off'}" role="option" data-choose="${esc(p.id)}">
-        ${portrait({ kind: 'player', name: p.name, headshot: p.headshot }, 30)}
-        <span class="r-name">${esc(p.name)}</span><span class="r-sub">${esc([p.team_abbr, p.position].filter(Boolean).join(' '))}</span>
-      </button>`).join('')
-      + (!exact ? `<button class="result custom" role="option" data-choose="custom:${esc(term)}">Use “${esc(term)}”</button>` : '');
+    box.innerHTML = found.slice(0, 8).map((p) => pickRow(p.id, { kind: 'player', name: p.name, headshot: p.headshot },
+      [p.team_abbr, p.position].filter(Boolean).join(' · ')).replace('class="prow"', `class="prow ${fits(p) ? '' : 'off'}"`)).join('')
+      + (!exact ? `<button class="prow custom" data-choose="custom:${esc(term)}"><span class="prank"></span><span class="face blank" style="width:40px;height:40px">${ICON.plus}</span><span class="pname"><strong>Use “${esc(term)}”</strong><small>Not in the list? Pick them by name.</small></span></button>` : '');
   };
 
-  root.oninput = (e) => {
+  const choose = async (id) => {
+    const sheet = sheets.find((s) => s.qid === active.qid);
+    const arr = active.mode === 'answer' ? answers(sheet) : mine(sheet);
+    arr[active.flat] = id;
+    // Move straight on to the next empty spot in the same section.
+    const sec = SEL.sectionOf(sheet, active.flat);
+    const next = id ? arr.findIndex((v, i) => !v && i > active.flat && SEL.sectionOf(sheet, i) === sec) : -1;
+    const mode = active.mode;
+    if (next >= 0 && kind !== 'awards') { active = { ...active, flat: next }; drawPicker(); } else closePicker();
+    if (mode === 'answer') {
+      await saveSettings(sheet, { answers: arr.some(Boolean) ? arr : null, locked_at: settings.get(sheet.qid)?.locked_at || new Date().toISOString() });
+    } else {
+      picksByUser.get(me).set(sheet.qid, arr);
+      draw();
+      await save(sheet, arr);
+    }
+    draw();
+  };
+
+  dialog.oninput = (e) => {
     if (e.target.id !== 'sheet-search') return;
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => runSearch(e.target), 180);
   };
-  root.onkeydown = (e) => { if (e.key === 'Escape' && active) { active = null; draw(); } };
+  dialog.onclick = (e) => {
+    if (e.target === dialog || e.target.closest('[data-close]')) return closePicker();
+    if (e.target.closest('[data-remove]') && active) return choose('');
+    const el = e.target.closest('[data-choose]');
+    if (el && active) choose(el.dataset.choose);
+  };
+  dialog.onclose = () => { active = null; };
+  root.onkeydown = (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.spot.tappable')) { e.preventDefault(); e.target.click(); }
+  };
 
   root.onclick = async (e) => {
     const t = (sel) => e.target.closest(sel);
@@ -1365,30 +1619,7 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     if (t('[data-ownermode]')) {
       ownerMode = !ownerMode; if (!ownerMode) resultsFor = null; draw();
     } else if ((el = t('[data-side]'))) {
-      side = el.dataset.side; active = null; draw();
-    } else if ((el = t('[data-open]'))) {
-      active = { qid: el.dataset.q, flat: Number(el.dataset.open), mode: el.dataset.mode };
-      draw();
-    } else if (t('[data-close]')) {
-      active = null; draw();
-    } else if ((el = t('[data-choose]')) && active) {
-      const sheet = sheetOf(active.qid);
-      const id = el.dataset.choose;
-      const arr = active.mode === 'answer' ? answers(sheet) : mine(sheet);
-      arr[active.flat] = id;
-      // Move straight on to the next empty spot in the same section.
-      const sec = SEL.sectionOf(sheet, active.flat);
-      const next = arr.findIndex((v, i) => !v && i > active.flat && SEL.sectionOf(sheet, i) === sec);
-      const mode = active.mode;
-      active = next >= 0 ? { ...active, flat: next } : null;
-      if (mode === 'answer') {
-        await saveSettings(sheet, { answers: arr, locked_at: settings.get(sheet.qid)?.locked_at || new Date().toISOString() });
-      } else {
-        picksByUser.get(me).set(sheet.qid, arr);
-        draw();
-        await save(sheet, arr);
-      }
-      draw();
+      side = el.dataset.side; draw();
     } else if ((el = t('[data-clear]'))) {
       const sheet = sheetOf(el.dataset.q);
       const flat = Number(el.dataset.clear);
@@ -1402,19 +1633,29 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
         await save(sheet, arr);
       }
       draw();
+    } else if ((el = t('[data-open]'))) {
+      active = { qid: el.dataset.q, flat: Number(el.dataset.open), mode: el.dataset.mode };
+      drawPicker();
     } else if ((el = t('[data-lock]'))) {
       await saveSettings(sheetOf(el.dataset.lock), { locked_at: new Date().toISOString() });
-      active = null; draw();
+      draw();
     } else if ((el = t('[data-unlock]'))) {
       await saveSettings(sheetOf(el.dataset.unlock), { locked_at: null });
       draw();
     } else if ((el = t('[data-results]'))) {
       resultsFor = resultsFor === el.dataset.results ? null : el.dataset.results;
-      active = null; draw();
+      draw();
     }
   };
 
   draw();
+
+  // Shown from the cache? Check for anything newer behind the scenes.
+  if (cached) {
+    const before = JSON.stringify([cached.picks, cached.settings]);
+    const fresh = await fetchAll().catch(() => null);
+    if (fresh && !stale() && !active && JSON.stringify([fresh.picks, fresh.settings]) !== before) { apply(fresh); draw(); }
+  }
 }
 
 // ----- Final standings predictor ---------------------------------------------
@@ -1602,13 +1843,13 @@ async function mountPredictions(league, members, route, stale) {
 function predictionsNav(league, route) {
   const sub = route.sub || 'standings';
   const items = [
-    ['standings', 'Final standings'],
-    ['awards', 'Awards'],
-    ['allstars', SEL.ALLSTAR_NAME[league.sport] || 'All-Stars'],
-    ['yearend', 'Year-end teams'],
+    ['standings', 'Final standings', 'standings'],
+    ['awards', 'Awards', 'trophy'],
+    ['allstars', SEL.ALLSTAR_NAME[league.sport] || 'All-Stars', 'star'],
+    ['yearend', 'Year-end teams', 'medal'],
   ];
-  return `<nav class="subnav" aria-label="Predictions">${items.map(([k, label]) =>
-    `<a href="#/league/${league.id}?tab=predict&sub=${k}" class="${sub === k ? 'on' : ''}" ${sub === k ? 'aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>`;
+  return `<nav class="subnav" aria-label="Predictions">${items.map(([k, label, icon]) =>
+    `<a href="#/league/${league.id}?tab=predict&sub=${k}" class="${sub === k ? 'on' : ''}" ${sub === k ? 'aria-current="page"' : ''}>${ICON[icon]}${esc(label)}</a>`).join('')}</nav>`;
 }
 
 // ===========================================================================
@@ -1768,9 +2009,9 @@ async function mountBracket(league, members, games, stale, route) {
   const playInHtml = (b) => {
     if (!b[c0].playIn) return '';
     const block = (c) => `<div class="pi-conf"><h4>${esc(c)}</h4><div class="pi-games">
-      ${matchup(b[c].playIn[0], '7 v 8 · winner is the 7 seed')}
-      ${matchup(b[c].playIn[1], '9 v 10 · loser is out')}
-      ${matchup(b[c].playIn[2], 'Last chance · winner is the 8 seed')}
+      ${matchup(b[c].playIn[0], '7 v 8: winner is 7th')}
+      ${matchup(b[c].playIn[1], '9 v 10: loser is out')}
+      ${matchup(b[c].playIn[2], 'Last chance: winner is 8th')}
     </div></div>`;
     return `<section class="playin"><h3>Play-in tournament</h3><div class="pi-wrap">${block(c0)}${block(c1)}</div></section>`;
   };
@@ -1806,20 +2047,30 @@ async function mountBracket(league, members, games, stale, route) {
       </div>`;
   };
 
+  // Title odds as a heat grid: one row per team, one cell per round reached, darker = likelier.
   const oddsHtml = () => {
     const rows = oddsRows();
-    if (!rows) return '<section class="panel"><h3>Title odds</h3><p class="muted">Simulating playoffs…</p></section>';
-    const top = rows[0]?.champ || 1;
-    return `<section class="panel">
-      <h3>Title odds</h3>
-      <p class="muted small">Thousands of simulated playoffs using each team’s record and home advantage${F.bestOf[0] > 1 ? ', played as full series' : ''}. A simple model, not a forecast.</p>
-      <div class="odds-wrap"><table class="odds">
-        <thead><tr><th>Team</th><th class="num">${esc(F.rounds[1])}</th><th class="num">${esc(F.rounds[2])}</th><th class="num">${esc(F.rounds[3])}</th><th class="num">Champion</th></tr></thead>
-        <tbody>${rows.map((r) => `<tr>
-          <td><span class="seed">${r.team.seed}</span> <strong>${esc(r.team.abbr)}</strong> <span class="muted small">${esc(r.conference)}</span></td>
-          <td class="num">${pct(r.r2)}</td><td class="num">${pct(r.r3)}</td><td class="num">${pct(r.final)}</td>
-          <td class="num"><span class="bar" style="--w:${Math.round((r.champ * 100) / top)}%"></span><strong>${pct(r.champ)}</strong></td></tr>`).join('')}</tbody>
-      </table></div></section>`;
+    const head = `<header class="odds-head">${ICON.dice}<div><h3>Title odds</h3>
+      <p class="muted small">How far each team gets in thousands of simulated playoffs, using records and home advantage${F.bestOf[0] > 1 ? ', played as full series' : ''}. A simple model, not a forecast.</p></div></header>`;
+    if (!rows) return `<section class="panel odds-panel">${head}${skeleton(4)}</section>`;
+    const logoOf = (abbr) => allTeams.find((t) => t.abbr === abbr);
+    const cols = [[F.rounds[1], 'r2'], [F.rounds[2], 'r3'], [F.rounds[3], 'final'], ['Champion', 'champ']];
+    const cell = (r, key, label) => {
+      const v = r[key];
+      const tint = Math.round(Math.sqrt(v) * 100); // sqrt so small chances still show
+      return `<td class="heat ${v >= 0.42 ? 'deep' : ''}" style="--t:${tint}%" title="${esc(`${r.team.abbr} reaches ${label}: ${pct(v)}`)}">${pct(v)}</td>`;
+    };
+    const table = (conf) => {
+      const list = rows.filter((r) => r.conference === conf).sort((a, b) => b.champ - a.champ || b.final - a.final);
+      return `<div class="odds-conf"><h4>${esc(conf)}</h4>
+        <table class="odds"><thead><tr><th>Team</th>${cols.map(([label]) => `<th class="num">${esc(label)}</th>`).join('')}</tr></thead>
+        <tbody>${list.map((r) => `<tr>
+          <td class="odds-team"><span class="seed">${r.team.seed}</span>${teamLogo(logoOf(r.team.abbr) || r.team, 22)}<strong>${esc(r.team.abbr)}</strong></td>
+          ${cols.map(([label, key]) => cell(r, key, label)).join('')}</tr>`).join('')}</tbody></table></div>`;
+    };
+    return `<section class="panel odds-panel">${head}
+      <div class="odds-grid">${F.conferences.map(table).join('')}</div>
+      <p class="odds-key muted small"><span class="key-ramp"></span>Less likely → more likely</p></section>`;
   };
 
   const bracketStandings = () => {
@@ -2000,6 +2251,37 @@ app.addEventListener('click', (e) => {
 // Boot
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Intro: what Pick Six is. Opens on the first visit and from the ? button.
+// ---------------------------------------------------------------------------
+
+const INTRO_KEY = 'pickSix.introSeen';
+const INTRO_STEPS = [
+  ['users', 'Start a league', 'Make a private league for the NFL, NBA, NHL or MLB and send friends the invite link.'],
+  ['picks', 'Pick winners', 'Choose the winner of every real game. Each pick locks when its game starts.'],
+  ['board', 'Climb the leaderboard', 'One point per correct pick. The site keeps score as results come in.'],
+  ['bracket', 'Fill out a bracket', 'Call the playoffs round by round, or simulate them for fun.'],
+  ['predict', 'Predict the season', 'Final standings, awards, All-Stars and year-end teams.'],
+];
+
+function openIntro() {
+  const dlg = document.getElementById('intro-dialog');
+  dlg.innerHTML = `
+    <button class="icon-btn intro-x" data-close aria-label="Close">${ICON.close}</button>
+    <div class="intro-hero"><img src="logo.svg" alt="" width="64" height="64">
+      <div><h2 id="intro-title">Welcome to Pick Six</h2><p>A free pick'em and bracket game for you and your friends.</p></div></div>
+    <ol class="intro-steps">${INTRO_STEPS.map(([icon, title, text]) => `
+      <li><span class="intro-ic">${ICON[icon]}</span><div><strong>${title}</strong><p>${text}</p></div></li>`).join('')}</ol>
+    <div class="intro-foot"><a href="#/how" class="link small" data-close>Read the full rules</a>
+      <button class="btn" data-close autofocus>Let's go</button></div>`;
+  dlg.onclick = (e) => { if (e.target === dlg || e.target.closest('[data-close]')) dlg.close(); };
+  dlg.onclose = () => { try { localStorage.setItem(INTRO_KEY, '1'); } catch { /* private mode */ } };
+  if (!dlg.open) dlg.showModal();
+}
+
+const helpBtn = document.getElementById('help-btn');
+if (helpBtn) { helpBtn.innerHTML = ICON.help; helpBtn.onclick = openIntro; }
+
 async function boot() {
   if (configured) {
     // Surface errors from an expired/used email link
@@ -2026,6 +2308,9 @@ async function boot() {
   }
   window.addEventListener('hashchange', render);
   render();
+  let seen = true;
+  try { seen = !!localStorage.getItem(INTRO_KEY); } catch { /* private mode */ }
+  if (!seen) setTimeout(openIntro, 400);
 }
 
 boot();

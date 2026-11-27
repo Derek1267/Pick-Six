@@ -9,6 +9,12 @@
 // (coach / executive awards) instead of a player.
 
 const S = (label, n, more = {}) => ({ label, n, ...more });
+
+// Surface layouts: each row has the same number of cells so positions line up in columns;
+// `_` is an empty cell. Values are flat slot indexes (display only; stored order never changes).
+const _ = null;
+const mid = (f) => [_, _, _, _, f, _, _, _, _]; // the middle of a 9-wide football formation
+const DIAMOND = [[5, _, 6, _, 7], [_, 4, _, 2, _], [3, _, _, _, 1], [_, _, 0, _, _], [_, _, 8, _, _]];
 const NBA_G = ['PG', 'SG', 'G'];
 const NBA_F = ['SF', 'PF', 'F', 'C', 'FC', 'GF'];
 const NHL_F = ['C', 'LW', 'RW', 'F', 'W'];
@@ -116,6 +122,7 @@ const nbaAllStar = (conf) => ({
     S('Reserves', 7, { kind: 'reserve' }),
     extras,
   ],
+  layout: { surface: 'court', groups: [{ rows: [[2, 3, 4], [0, _, 1]] }] },
 });
 
 const proBowl = (conf) => ({
@@ -133,20 +140,28 @@ const proBowl = (conf) => ({
       posBySlot: [['DE'], ['DE'], ['DE'], ['DT', 'NT'], ['DT', 'NT'], ['DT', 'NT'], ['OLB', 'LB'], ['OLB', 'LB'], ['OLB', 'LB'],
         ['ILB', 'LB', 'MLB'], ['ILB', 'LB', 'MLB'], ['CB'], ['CB'], ['CB'], ['CB'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS']],
     }),
-    S('Special teams', 5, { labels: ['K', 'P', 'LS', 'Returner', 'Special teamer'], posBySlot: [['PK', 'K'], ['P'], ['LS'], ['WR', 'RB', 'CB'], null] }),
+    S('Special teams', 5, { labels: ['K', 'P', 'LS', 'RET', 'ST'], posBySlot: [['PK', 'K'], ['P'], ['LS'], ['WR', 'RB', 'CB'], null] }),
     extras,
   ],
+  layout: {
+    surface: 'field',
+    groups: [
+      { title: 'Offense', rows: [[7, 11, 13, 16, 19, 17, 14, 12, 8], mid(0), mid(6), mid(3)], bench: [[1, 2, 4, 5, 9, 10, 15, 18, 20]] },
+      { title: 'Defense', rows: [[_, _, _, 36, _, 37, _, _, _], [32, _, 27, _, 30, _, 28, _, 33], [_, 21, _, 24, _, 25, _, 22, _]], bench: [[_, 23, 26, 29, 31, 34, 35, 38, _]] },
+    ],
+  },
 });
 
 const nhlDivision = (div) => ({
   id: `allstar-${div.toLowerCase()}`, side: div, title: `${div} All-Stars`, points: 1,
   filter: { division: div },
   sections: [
-    S('Forwards', 6, { size: 'big', labels: Array(6).fill('Forward'), posBySlot: Array(6).fill(NHL_F) }),
-    S('Defence', 3, { size: 'big', labels: Array(3).fill('Defence'), posBySlot: Array(3).fill(['D']) }),
-    S('Goalies', 2, { size: 'big', labels: ['Goalie', 'Goalie'], posBySlot: [['G'], ['G']] }),
+    S('Forwards', 6, { size: 'big', labels: ['LW', 'C', 'RW', 'LW', 'C', 'RW'], posBySlot: Array(6).fill(NHL_F) }),
+    S('Defence', 3, { size: 'big', labels: ['D', 'D', 'D'], posBySlot: Array(3).fill(['D']) }),
+    S('Goalies', 2, { size: 'big', labels: ['G', 'G'], posBySlot: [['G'], ['G']] }),
     extras,
   ],
+  layout: { surface: 'rink', groups: [{ rows: [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, _, 10]] }] },
 });
 
 const mlbAllStar = (lg) => ({
@@ -155,13 +170,14 @@ const mlbAllStar = (lg) => ({
   sections: [
     S('Starters', 9, {
       size: 'big',
-      labels: ['Catcher', 'First base', 'Second base', 'Third base', 'Shortstop', 'Outfield', 'Outfield', 'Outfield', 'Designated hitter'],
+      labels: ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'],
       posBySlot: [['C'], ['1B'], ['2B'], ['3B'], ['SS'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['DH']],
     }),
     S('Pitchers', 12, { kind: 'reserve', pos: ['SP', 'RP', 'P'] }),
     S('Reserves', 11, { kind: 'reserve' }),
     extras,
   ],
+  layout: { surface: 'diamond', groups: [{ rows: DIAMOND }] },
 });
 
 export const ALLSTARS = {
@@ -177,7 +193,10 @@ export const ALLSTAR_NAME = { nfl: 'Pro Bowl', nba: 'All-Stars', nhl: 'All-Stars
 // ---------------------------------------------------------------------------
 
 const yearEnd = (id, title, heading, group, sections) => ({ id, title, heading, group, sections, points: 1 });
-const five = (id, title, heading, group) => yearEnd(id, title, heading, group, [S('Players', 5, { size: 'big' })]);
+const five = (id, title, heading, group) => ({
+  ...yearEnd(id, title, heading, group, [S('Players', 5, { size: 'big' })]),
+  layout: { surface: 'court', groups: [{ rows: [[0, 1, 2], [3, _, 4]] }] },
+});
 
 const allPro = (tier) => yearEnd(`allpro-${tier}`, `${tier === 1 ? 'First' : 'Second'} Team All-Pro`, 'All-Pro', 'allpro', [
   S('Offense', 12, {
@@ -185,26 +204,42 @@ const allPro = (tier) => yearEnd(`allpro-${tier}`, `${tier === 1 ? 'First' : 'Se
     posBySlot: [['QB'], ['RB'], ['FB', 'RB'], ['WR'], ['WR'], ['WR'], ['TE'], ['OT', 'T'], ['OT', 'T'], ['G', 'OG'], ['G', 'OG'], ['C']],
   }),
   S('Defense', 12, {
-    labels: ['Edge', 'Edge', 'DT', 'DT', 'LB', 'LB', 'CB', 'CB', 'S', 'S', 'Slot CB', 'DB'],
+    labels: ['EDGE', 'EDGE', 'DT', 'DT', 'LB', 'LB', 'CB', 'CB', 'S', 'S', 'NB', 'DB'],
     posBySlot: [['DE', 'OLB'], ['DE', 'OLB'], ['DT', 'NT'], ['DT', 'NT'], ['LB', 'ILB', 'OLB'], ['LB', 'ILB', 'OLB'], ['CB'], ['CB'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS'], ['CB'], ['CB', 'S']],
   }),
   S('Special teams', 4, { labels: ['K', 'P', 'KR', 'PR'], posBySlot: [['PK', 'K'], ['P'], null, null] }),
 ]);
+const allProTeam = (tier) => ({
+  ...allPro(tier),
+  layout: {
+    surface: 'field',
+    groups: [
+      { title: 'Offense', rows: [[3, 5, 7, 9, 11, 10, 8, 6, 4], mid(0), mid(2), mid(1)] },
+      { title: 'Defense', rows: [[_, _, _, 20, _, 21, _, _, _], [18, 22, _, 16, _, 17, _, 23, 19], [_, 12, _, 14, _, 15, _, 13, _]] },
+    ],
+  },
+});
 
-const nhlTeam = (id, title, heading, group) => yearEnd(id, title, heading, group, [
-  S('Lineup', 6, {
-    size: 'big', labels: ['Centre', 'Left wing', 'Right wing', 'Defence', 'Defence', 'Goalie'],
-    posBySlot: [['C'], ['LW', 'W'], ['RW', 'W'], ['D'], ['D'], ['G']],
-  }),
-]);
+const nhlTeam = (id, title, heading, group) => ({
+  ...yearEnd(id, title, heading, group, [
+    S('Lineup', 6, {
+      size: 'big', labels: ['C', 'LW', 'RW', 'D', 'D', 'G'],
+      posBySlot: [['C'], ['LW', 'W'], ['RW', 'W'], ['D'], ['D'], ['G']],
+    }),
+  ]),
+  layout: { surface: 'rink', groups: [{ rows: [[1, 0, 2], [3, _, 4], [_, 5, _]] }] },
+});
 
-const allMlb = (tier) => yearEnd(`allmlb-${tier}`, `All-MLB ${tier === 1 ? 'First' : 'Second'} Team`, 'All-MLB', 'allmlb', [
+const allMlb = (tier) => withDiamond(yearEnd(`allmlb-${tier}`, `All-MLB ${tier === 1 ? 'First' : 'Second'} Team`, 'All-MLB', 'allmlb', [
   S('Position players', 9, {
-    size: 'big', labels: ['C', '1B', '2B', '3B', 'SS', 'OF', 'OF', 'OF', 'DH'],
+    size: 'big', labels: ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'],
     posBySlot: [['C'], ['1B'], ['2B'], ['3B'], ['SS'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['DH']],
   }),
   S('Pitchers', 7, { labels: ['SP', 'SP', 'SP', 'SP', 'SP', 'RP', 'RP'], posBySlot: [...Array(5).fill(['SP', 'P']), ['RP', 'P'], ['RP', 'P']] }),
-]);
+]));
+function withDiamond(sheet) {
+  return { ...sheet, layout: { surface: 'diamond', groups: [{ rows: DIAMOND }] } };
+}
 
 export const YEAR_END = {
   nba: [
@@ -216,7 +251,7 @@ export const YEAR_END = {
     five('allrookie-1', 'First Team', 'All-Rookie', 'allrookie'),
     five('allrookie-2', 'Second Team', 'All-Rookie', 'allrookie'),
   ],
-  nfl: [allPro(1), allPro(2)],
+  nfl: [allProTeam(1), allProTeam(2)],
   nhl: [
     nhlTeam('allstarteam-1', 'First Team', 'NHL All-Star Teams', 'nhlteam'),
     nhlTeam('allstarteam-2', 'Second Team', 'NHL All-Star Teams', 'nhlteam'),
@@ -228,6 +263,15 @@ export const YEAR_END = {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Slots a sheet's surface layout draws (formation rows and bench); the rest render as plain rows.
+export function laidOut(sheet) {
+  const set = new Set();
+  for (const g of sheet.layout?.groups || []) {
+    for (const r of [...g.rows, ...(g.bench || [])]) r.forEach((f) => { if (f !== null) set.add(f); });
+  }
+  return set;
+}
 
 export const slotCount = (sheet) => sheet.sections.reduce((n, s) => n + s.n, 0);
 
