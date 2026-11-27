@@ -31,5 +31,14 @@ export const FAVOURITES = {
     adams: ['BOS', 'CAR', 'OTT', 'MTL', 'EDM'],
     byng: ['Jack Hughes'],
   },
-  mlb: {},
+  // No 2027 odds yet: last season's award finalists instead (see FAVOURITE_TITLE).
+  mlb: {
+    almvp: ['Yordan Alvarez', 'Junior Caminero', 'Bobby Witt Jr.'],
+    nlmvp: ['Pete Crow-Armstrong'],
+    alcy: ['Cam Schlittler', 'Dylan Cease', 'Parker Messick'],
+    nlcy: ['Jacob Misiorowski', 'Chris Sale', 'Cristopher Sanchez'],
+  },
 };
+
+// Heading over a sport's list when it isn't current betting favourites.
+export const FAVOURITE_TITLE = { mlb: '2026 finalists' };

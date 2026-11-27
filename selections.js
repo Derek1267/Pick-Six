@@ -18,6 +18,15 @@ const DIAMOND = [[5, _, 6, _, 7], [_, 4, _, 2, _], [3, _, _, _, 1], [_, _, 0, _,
 const NBA_G = ['PG', 'SG', 'G'];
 const NBA_F = ['SF', 'PF', 'F', 'C', 'FC', 'GF'];
 const NHL_F = ['C', 'LW', 'RW', 'F', 'W'];
+// Football position groups (ESPN lists most linebackers as LB and safeties as S).
+const OT = ['OT', 'T', 'OL'];
+const OG = ['G', 'OG', 'OL'];
+const OC = ['C', 'OL'];
+const EDGE = ['DE', 'OLB', 'LB'];
+const DL = ['DT', 'NT', 'DE'];
+const LB = ['LB', 'OLB', 'ILB', 'MLB'];
+const CB = ['CB', 'DB'];
+const SAF = ['S', 'FS', 'SS', 'DB'];
 
 // ---------------------------------------------------------------------------
 // Awards (3 points each)
@@ -43,8 +52,8 @@ export const AWARDS = {
     award('smoy', 'Sixth Man of the Year', 'John Havlicek Trophy', { cat: 'season' }),
     award('mip', 'Most Improved Player', 'George Mikan Trophy', { cat: 'season' }),
     award('clutch', 'Clutch Player of the Year', 'Jerry West Trophy', { cat: 'season' }),
-    teamAward('coy', 'Coach of the Year', 'Red Auerbach Trophy · pick the team', { cat: 'staff' }),
-    teamAward('eoy', 'Executive of the Year', 'Pick the team', { cat: 'staff' }),
+    teamAward('coy', 'Coach of the Year', 'Red Auerbach Trophy', { cat: 'staff' }),
+    teamAward('eoy', 'Executive of the Year', 'Front office', { cat: 'staff' }),
     award('fmvp', 'Finals MVP', 'Bill Russell Trophy', { cat: 'post' }),
     award('ecfmvp', 'East Finals MVP', 'Larry Bird Trophy', { cat: 'post', filter: { conference: 'East' } }),
     award('wcfmvp', 'West Finals MVP', 'Magic Johnson Trophy', { cat: 'post', filter: { conference: 'West' } }),
@@ -62,8 +71,8 @@ export const AWARDS = {
     award('oroy', 'Offensive Rookie of the Year', null, { cat: 'season' }),
     award('droy', 'Defensive Rookie of the Year', null, { cat: 'season' }),
     award('cpoy', 'Comeback Player of the Year', null, { cat: 'season' }),
-    teamAward('coy', 'Coach of the Year', 'Pick the team', { cat: 'staff' }),
-    teamAward('aoy', 'Assistant Coach of the Year', 'Pick the team', { cat: 'staff' }),
+    teamAward('coy', 'Coach of the Year', 'Head coach', { cat: 'staff' }),
+    teamAward('aoy', 'Assistant Coach of the Year', 'Pick the team’s staff', { cat: 'staff' }),
     award('sbmvp', 'Super Bowl MVP', 'Pete Rozelle Trophy', { cat: 'post' }),
     award('wpmoy', 'Walter Payton Man of the Year', null, { cat: 'character' }),
   ],
@@ -77,8 +86,8 @@ export const AWARDS = {
     award('artross', 'Art Ross Trophy', 'Most points', { cat: 'stats' }),
     award('rocket', 'Rocket Richard Trophy', 'Most goals', { cat: 'stats' }),
     award('jennings', 'William M. Jennings Trophy', 'Fewest goals against', { cat: 'stats' }),
-    teamAward('adams', 'Jack Adams Award', 'Coach of the year · pick the team', { cat: 'staff' }),
-    teamAward('gm', 'General Manager of the Year', 'Pick the team', { cat: 'staff' }),
+    teamAward('adams', 'Jack Adams Award', 'Coach of the year', { cat: 'staff' }),
+    teamAward('gm', 'General Manager of the Year', 'Front office', { cat: 'staff' }),
     award('connsmythe', 'Conn Smythe Trophy', 'Playoff MVP', { cat: 'post' }),
     award('byng', 'Lady Byng Trophy', 'Sportsmanship', { cat: 'character' }),
     award('masterton', 'Masterton Trophy', 'Perseverance and dedication', { cat: 'character' }),
@@ -97,8 +106,8 @@ export const AWARDS = {
     award('nlcomeback', 'NL Comeback Player', null, { cat: 'season', filter: { conference: 'NL' } }),
     award('alaaron', 'AL Hank Aaron Award', 'Best hitter', { cat: 'stats', filter: { conference: 'AL' } }),
     award('nlaaron', 'NL Hank Aaron Award', 'Best hitter', { cat: 'stats', filter: { conference: 'NL' } }),
-    teamAward('almoy', 'AL Manager of the Year', 'Pick the team', { cat: 'staff', filter: { conference: 'AL' } }),
-    teamAward('nlmoy', 'NL Manager of the Year', 'Pick the team', { cat: 'staff', filter: { conference: 'NL' } }),
+    teamAward('almoy', 'AL Manager of the Year', 'Manager', { cat: 'staff', filter: { conference: 'AL' } }),
+    teamAward('nlmoy', 'NL Manager of the Year', 'Manager', { cat: 'staff', filter: { conference: 'NL' } }),
     award('alcsmvp', 'ALCS MVP', null, { cat: 'post', filter: { conference: 'AL' } }),
     award('nlcsmvp', 'NLCS MVP', null, { cat: 'post', filter: { conference: 'NL' } }),
     award('wsmvp', 'World Series MVP', 'Willie Mays Award', { cat: 'post' }),
@@ -133,14 +142,13 @@ const proBowl = (conf) => ({
       size: 'big',
       labels: ['QB', 'QB', 'QB', 'RB', 'RB', 'RB', 'FB', 'WR', 'WR', 'WR', 'WR', 'TE', 'TE', 'T', 'T', 'T', 'G', 'G', 'G', 'C', 'C'],
       posBySlot: [['QB'], ['QB'], ['QB'], ['RB'], ['RB'], ['RB'], ['FB', 'RB'], ['WR'], ['WR'], ['WR'], ['WR'], ['TE'], ['TE'],
-        ['OT', 'T'], ['OT', 'T'], ['OT', 'T'], ['G', 'OG'], ['G', 'OG'], ['G', 'OG'], ['C'], ['C']],
+        OT, OT, OT, OG, OG, OG, OC, OC],
     }),
     S('Defense', 18, {
       labels: ['DE', 'DE', 'DE', 'DT', 'DT', 'DT', 'OLB', 'OLB', 'OLB', 'ILB', 'ILB', 'CB', 'CB', 'CB', 'CB', 'S', 'S', 'S'],
-      posBySlot: [['DE'], ['DE'], ['DE'], ['DT', 'NT'], ['DT', 'NT'], ['DT', 'NT'], ['OLB', 'LB'], ['OLB', 'LB'], ['OLB', 'LB'],
-        ['ILB', 'LB', 'MLB'], ['ILB', 'LB', 'MLB'], ['CB'], ['CB'], ['CB'], ['CB'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS']],
+      posBySlot: [EDGE, EDGE, EDGE, DL, DL, DL, LB, LB, LB, LB, LB, CB, CB, CB, CB, SAF, SAF, SAF],
     }),
-    S('Special teams', 5, { labels: ['K', 'P', 'LS', 'RET', 'ST'], posBySlot: [['PK', 'K'], ['P'], ['LS'], ['WR', 'RB', 'CB'], null] }),
+    S('Special teams', 5, { labels: ['K', 'P', 'LS', 'RET', 'ST'], posBySlot: [['PK', 'K'], ['P'], ['LS'], null, null] }),
     extras,
   ],
   layout: {
@@ -201,11 +209,11 @@ const five = (id, title, heading, group) => ({
 const allPro = (tier) => yearEnd(`allpro-${tier}`, `${tier === 1 ? 'First' : 'Second'} Team All-Pro`, 'All-Pro', 'allpro', [
   S('Offense', 12, {
     size: 'big', labels: ['QB', 'RB', 'FB', 'WR', 'WR', 'WR', 'TE', 'T', 'T', 'G', 'G', 'C'],
-    posBySlot: [['QB'], ['RB'], ['FB', 'RB'], ['WR'], ['WR'], ['WR'], ['TE'], ['OT', 'T'], ['OT', 'T'], ['G', 'OG'], ['G', 'OG'], ['C']],
+    posBySlot: [['QB'], ['RB'], ['FB', 'RB'], ['WR'], ['WR'], ['WR'], ['TE'], OT, OT, OG, OG, OC],
   }),
   S('Defense', 12, {
     labels: ['EDGE', 'EDGE', 'DT', 'DT', 'LB', 'LB', 'CB', 'CB', 'S', 'S', 'NB', 'DB'],
-    posBySlot: [['DE', 'OLB'], ['DE', 'OLB'], ['DT', 'NT'], ['DT', 'NT'], ['LB', 'ILB', 'OLB'], ['LB', 'ILB', 'OLB'], ['CB'], ['CB'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS'], ['CB'], ['CB', 'S']],
+    posBySlot: [EDGE, EDGE, DL, DL, LB, LB, CB, CB, SAF, SAF, CB, [...CB, ...SAF]],
   }),
   S('Special teams', 4, { labels: ['K', 'P', 'KR', 'PR'], posBySlot: [['PK', 'K'], ['P'], null, null] }),
 ]);
@@ -298,6 +306,17 @@ export function slotPositions(sheet, flat) {
   if (!loc) return null;
   return loc.section.posBySlot?.[loc.i] || loc.section.pos || null;
 }
+// Positions a slot is limited to. Football is strict (no quarterback at safety); hockey keeps
+// goalies in net and baseball keeps pitchers and hitters apart. Basketball is positionless.
+const PITCHERS = ['SP', 'RP', 'P'];
+export function slotRule(sport, sheet, flat) {
+  const fit = slotPositions(sheet, flat);
+  if (sport === 'nfl') return fit?.length ? { only: fit } : null;
+  if (sport === 'nhl' && fit?.length) return fit.includes('G') ? { only: ['G'] } : { not: ['G'] };
+  if (sport === 'mlb' && fit?.length) return fit.some((p) => PITCHERS.includes(p)) ? { only: PITCHERS } : { not: PITCHERS };
+  return null;
+}
+
 export function slotLabel(sheet, flat) {
   const loc = locate(sheet, flat);
   return loc?.section.labels?.[loc.i] || null;

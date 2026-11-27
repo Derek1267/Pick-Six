@@ -187,11 +187,13 @@ begin
     raise exception 'Unknown sport %', p_sport;
   end if;
 
-  -- Default season: the one with upcoming games (else the latest loaded).
+  -- Default season: the one with upcoming games. In the off-season, the next one
+  -- (the latest loaded + 1), so leagues can make predictions before the schedule is out.
   v_season := coalesce(
     p_season,
     (select season from games where sport = p_sport and start_time > now()
-       order by start_time limit 1)
+       order by start_time limit 1),
+    (select max(season) + 1 from games where sport = p_sport)
   );
   if v_season is null then
     raise exception 'The % season hasn''t been loaded yet — check back when its schedule is out', upper(p_sport);

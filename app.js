@@ -12,7 +12,7 @@ import * as BR from './bracket.js';
 import * as SEL from './selections.js';
 import { ICON, CAT_ICON, SURFACE, ILLO } from './icons.js';
 import { STAFF, STAFF_ROLE } from './staff.js';
-import { FAVOURITES, FAVOURITES_AS_OF } from './favourites.js';
+import { FAVOURITES, FAVOURITES_AS_OF, FAVOURITE_TITLE } from './favourites.js';
 
 const app = document.getElementById('app');
 const accountNav = document.getElementById('account');
@@ -474,6 +474,7 @@ function renderHow() {
         <ul>
           <li>Start a private league for one sport (NFL, NBA, NHL or MLB) and share the invite link or 6-letter code.</li>
           <li>Only people in your league can see it, its picks or its standings.</li>
+          <li>Start one in the off-season too: it's for the season ahead. Predictions and brackets open right away, and picks start when the schedule comes out.</li>
           <li>The league owner can rename it, remove players or delete it. Anyone can leave a league from <strong>Manage</strong>.</li>
         </ul>
       </section>
@@ -575,9 +576,9 @@ async function renderHome(stale) {
         <fieldset class="sport-pick">
           <legend class="muted small">Sport</legend>
           ${Object.entries(SPORTS).map(([key, info]) => `
-            <label class="sport-option ${inSeason[key] ? '' : 'off'}" title="${inSeason[key] ? '' : `${info.name} opens when its next season's schedule is out`}">
-              <input type="radio" name="sport" value="${key}" ${key === firstOpen ? 'checked' : ''} ${inSeason[key] ? '' : 'disabled'}>
-              <span>${info.name}${inSeason[key] ? '' : ' <small>off-season</small>'}</span></label>`).join('')}
+            <label class="sport-option" title="${inSeason[key] ? '' : `Off-season: the league is for next season. Predictions open now; picks start with the schedule.`}">
+              <input type="radio" name="sport" value="${key}" ${key === firstOpen ? 'checked' : ''}>
+              <span>${info.name}${inSeason[key] ? '' : ' <small>next season</small>'}</span></label>`).join('')}
         </fieldset>
         <button class="btn" type="submit">Create league</button>
       </form>
@@ -783,12 +784,16 @@ function defaultSlate(slates, sport) {
 
 // ----- Picks tab -----
 
+const seasonName = (league) => (sportInfo(league.sport).daily && league.sport !== 'mlb'
+  ? `${league.season - 1}–${String(league.season).slice(2)}` : String(league.season));
+
 async function picksHtml(league, members, games, route) {
   const weeks = groupSlates(games, league.sport);
   const unit = sportInfo(league.sport).unit;
   if (!weeks.length) {
-    return `<div class="empty card illustrated">${ILLO.picks}<p><strong>No games loaded yet.</strong>
-      The schedule shows up here after the next sync.</p></div>`;
+    return `<div class="empty card illustrated">${ILLO.picks}<p><strong>The ${esc(seasonName(league))} schedule isn’t out yet.</strong>
+      Games show up here as soon as it’s published. Until then, make your <a href="#/league/${league.id}?tab=predict">predictions</a> and
+      build a <a href="#/league/${league.id}?tab=bracket&mode=fun">bracket</a>.</p></div>`;
   }
 
   const key = weeks.some((w) => w.key === route.week) ? route.week : defaultSlate(weeks, league.sport);
@@ -1133,12 +1138,14 @@ async function getTeams(sport) {
   return load();
 }
 
-async function searchPlayers(sport, term, teamAbbrs) {
+async function searchPlayers(sport, term, teamAbbrs, rule = null) {
   const safe = term.replace(/[%_,()]/g, ' ').trim();
   if (!safe) return [];
   let q = sb.from('players').select('id, name, team_abbr, position, headshot').eq('sport', sport)
     .ilike('name', `%${safe}%`).order('name').limit(30);
   if (teamAbbrs?.length) q = q.in('team_abbr', teamAbbrs);
+  if (rule?.only) q = q.in('position', rule.only);
+  if (rule?.not) q = q.not('position', 'in', `(${rule.not.join(',')})`);
   const { data } = await q;
   for (const p of data || []) playerCache.set(p.id, p);
   return data || [];
@@ -1423,7 +1430,7 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
       ${cats.map((cat) => `
         <section class="award-cat">
           <h3 class="cat-head">${CAT_ICON[cat] || ICON.trophy}${esc(SEL.AWARD_CATEGORIES[cat] || 'Awards')}</h3>
-          <div class="trophies">${sheets.filter((s) => (s.cat || 'season') === cat).map((sheet) => {
+          <div class="trophies" style="${[2, 3, 4, 5].map((m) => `--p${m}:${perRow(sheets.filter((s) => (s.cat || 'season') === cat).length, m)}`).join(';')}">${sheets.filter((s) => (s.cat || 'season') === cat).map((sheet) => {
             const [cls, label] = statusOf(sheet);
             const entering = resultsFor === sheet.qid;
             const values = entering ? answers(sheet) : mine(sheet);
@@ -1520,7 +1527,9 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     const players = (await favouritePlayers(sport, curated))
       .filter((p) => !used.has(p.id) && (!allowed || !p.team_abbr || allowed.has(p.team_abbr)));
     if (!players.length) return '';
-    return `<h3 class="pick-sub">${ICON.star}Favourites <span class="muted">as of ${FAVOURITES_AS_OF}</span></h3>
+    const title = FAVOURITE_TITLE[sport] ? `${esc(FAVOURITE_TITLE[sport])} <span class="muted">next season’s odds aren’t out yet</span>`
+      : `Favourites <span class="muted">as of ${FAVOURITES_AS_OF}</span>`;
+    return `<h3 class="pick-sub">${ICON.star}${title}</h3>
       <div class="plist">${players.slice(0, 5).map((p, i) => pickRow(p.id, { kind: 'player', name: p.name, headshot: p.headshot },
         [p.team_abbr, p.position].filter(Boolean).join(' · '), i + 1)).join('')}</div>`;
   };
@@ -1536,7 +1545,7 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     const current = currentId ? entityOf(currentId, teams) : null;
     const searchBox = sheet.pick === 'team' ? '' : `
       <label class="search-field">${ICON.search}<input type="search" id="sheet-search" autocomplete="off"
-        placeholder="Search ${esc(f?.conference || f?.division || sportInfo(sport).name)} players" aria-label="Search players"></label>
+        placeholder="Search ${esc(f?.conference || f?.division || sportInfo(sport).name)} ${esc(SEL.slotRule(sport, sheet, active.flat)?.only && label ? `${label}s` : 'players')}" aria-label="Search players"></label>
       <div class="plist" role="listbox" id="sheet-results"></div>`;
     dialog.innerHTML = `
       <header class="pick-head">
@@ -1566,7 +1575,8 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     const fitsPos = SEL.slotPositions(sheet, active.flat);
     const taken = usedIds(sheet, active.mode);
     const allowed = sheet.filter ? teamsFor(sheet).map((t) => t.abbr) : null;
-    const found = (await searchPlayers(sport, term, allowed)).filter((p) => !taken.has(p.id));
+    const rule = SEL.slotRule(sport, sheet, active.flat);
+    const found = (await searchPlayers(sport, term, allowed, rule)).filter((p) => !taken.has(p.id));
     if (input.value.trim() !== term) return; // a newer search is on its way
     const lower = term.toLowerCase();
     const fits = (p) => (fitsPos?.length ? fitsPos.includes(p.position) : true);
@@ -1675,10 +1685,11 @@ async function mountStandings(root, league, members, stale) {
   const qidOf = (c) => `${sport}:standings:${c}`;
   const qids = confs.map(qidOf);
 
-  const [teams, picksRes, settingsRes] = await Promise.all([
+  const [teams, picksRes, settingsRes, started] = await Promise.all([
     getTeams(sport),
     sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id).in('question_id', qids),
     sb.from('award_settings').select('question_id, locked_at').eq('league_id', league.id).in('question_id', qids),
+    seasonStarted(league),
   ]);
   if (stale()) return;
   if (!teams.length) {
@@ -1738,7 +1749,7 @@ async function mountStandings(root, league, members, stale) {
       return `<li class="rank-row ${diff === 0 ? 'exact' : Math.abs(diff) === 1 ? 'close' : ''}">
           <span class="rank">${i + 1}</span>
           ${teamLogo(t, 28)}
-          <span class="r-team"><strong>${esc(t?.name || abbr)}</strong><span class="muted small">${recordText(t)} · ${ordinal(now + 1)} today</span></span>
+          <span class="r-team"><strong>${esc(t?.name || abbr)}</strong><span class="muted small">${started ? `${recordText(t)} · ${ordinal(now + 1)} today` : `Last season ${recordText(t)} · ${ordinal(now + 1)}`}</span></span>
           ${open ? `<span class="movers">
             <button class="mv" data-move="${c}:${i}:-1" ${i === 0 ? 'disabled' : ''} aria-label="Move ${esc(t?.name || abbr)} up">▲</button>
             <button class="mv" data-move="${c}:${i}:1" ${i === order[c].length - 1 ? 'disabled' : ''} aria-label="Move ${esc(t?.name || abbr)} down">▼</button>
@@ -1749,8 +1760,9 @@ async function mountStandings(root, league, members, stale) {
       <section class="standings-col">
         <header>
           <h3>${esc(c)}</h3>
-          <p class="pred-score"><strong>${score.points}</strong> points if the season ended today <span class="muted small">${score.exact} in the exact spot</span></p>
-          ${!isSaved(c) && open ? '<p class="note">Starting from today’s standings. Move teams to make it yours.</p>' : ''}
+          ${started ? `<p class="pred-score"><strong>${score.points}</strong> points if the season ended today <span class="muted small">${score.exact} in the exact spot</span></p>`
+            : '<p class="pred-score muted small">Scoring starts with the first game of the season.</p>'}
+          ${!isSaved(c) && open ? `<p class="note">Starting from ${started ? 'today’s standings' : 'how last season finished'}. Move teams to make it yours.</p>` : ''}
           ${!open ? '<span class="pill locked">Locked</span>' : ''}
         </header>
         <ol class="ranks">${rows}</ol>
@@ -1762,7 +1774,7 @@ async function mountStandings(root, league, members, stale) {
 
   const leaderboard = () => {
     const anyLocked = confs.some((c) => !isOpen(c));
-    if (!anyLocked) return '';
+    if (!anyLocked || !started) return '';
     const rows = members.map((m) => {
       let pts = 0;
       for (const c of confs) {
@@ -1778,7 +1790,7 @@ async function mountStandings(root, league, members, stale) {
 
   const draw = () => {
     root.innerHTML = `
-      <p class="lede-sm">Predict where every team finishes. 3 points for the exact spot, 1 point for one spot off, scored live against today’s standings.
+      <p class="lede-sm">Predict where every team finishes. 3 points for the exact spot, 1 point for one spot off, ${started ? 'scored live against today’s standings' : 'scored live once the season starts'}.
         ${isOwner ? 'Lock each side before the season gets going.' : 'Everyone’s picks show once the owner locks them.'}</p>
       ${leaderboard()}
       <div class="standings-grid">${confs.map(list).join('')}</div>`;
@@ -1819,6 +1831,18 @@ async function mountStandings(root, league, members, stale) {
 }
 
 // Your saved standings prediction for a league (used to seed "Build your own").
+// Has this league's season played a game yet? (Off-season leagues are for the season ahead.)
+const startedCache = new Map();
+async function seasonStarted(league) {
+  const key = `${league.sport}:${league.season}`;
+  if (!startedCache.has(key)) {
+    const { data } = await sb.from('games').select('id').eq('sport', league.sport).eq('season', league.season)
+      .lte('start_time', new Date().toISOString()).limit(1);
+    startedCache.set(key, (data || []).length > 0);
+  }
+  return startedCache.get(key);
+}
+
 async function myStandingsPrediction(league) {
   const sport = league.sport;
   const confs = BR.formatOf(sport).conferences;

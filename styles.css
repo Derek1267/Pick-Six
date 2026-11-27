@@ -400,13 +400,21 @@ button.spot.empty:hover, button.spot.empty:focus-visible { border-style: solid; 
 /* ---------- awards: every tile in a row shares the same header and card heights ---------- */
 .award-cat { margin-bottom: 1.8rem; }
 .award-cat > h3 { font-size: 1.6rem; margin-bottom: .8rem; }
-.trophies { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: .7rem; }
-.trophy { display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: .7rem; padding: .9rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); text-align: center; }
+.trophies {
+  --gap: .7rem; --m: 1; --per: 1; --tw: calc((100cqi - (var(--m) - 1) * var(--gap)) / var(--m));
+  display: flex; flex-wrap: wrap; justify-content: center; gap: var(--gap);
+  max-width: calc(var(--per) * var(--tw) + (var(--per) - 1) * var(--gap)); margin: 0 auto;
+}
+/* rows are balanced (6 awards → 3 + 3, never 5 + 1) and every tile is the same width */
+@container (min-width: 440px) { .trophies { --m: 2; --per: var(--p2); } }
+@container (min-width: 670px) { .trophies { --m: 3; --per: var(--p3); } }
+@container (min-width: 900px) { .trophies { --m: 4; --per: var(--p4); } }
+@container (min-width: 1120px) { .trophies { --m: 5; --per: var(--p5); } }
+.trophy { flex: 0 0 var(--tw); width: var(--tw); display: flex; flex-direction: column; gap: .7rem; padding: .9rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); text-align: center; }
 .trophy.done { border-color: var(--gold); }
-.trophy header { align-self: start; }
-.trophy h4 { font: 800 1.3rem/1.05 var(--display); }
-.trophy header p { margin: .25rem 0 0; color: var(--muted); font-size: .8rem; min-height: 1.1em; }
-.trophy footer { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .5rem; align-self: start; }
+.trophy h4 { display: grid; align-items: center; min-height: 2.1em; font: 800 1.3rem/1.05 var(--display); }
+.trophy header p { min-height: 1.2em; margin: .25rem 0 0; color: var(--muted); font-size: .8rem; line-height: 1.2; white-space: nowrap; }
+.trophy footer { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .5rem; margin-top: auto; }
 .trophy .winner { font-size: .88rem; }
 
 /* ---------- the pick popup ---------- */
