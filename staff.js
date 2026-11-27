@@ -59,10 +59,42 @@ export const STAFF = {
   },
 };
 
+// MLS and NLL are keyed by team name (matched loosely), since their feed abbreviations vary.
+export const STAFF_BY_NAME = {
+  mls: {
+    'Atlanta United FC': t('Gerardo Martino'), 'Austin FC': t('Davy Arnaud (interim)'), 'Charlotte FC': t('Dean Smith'),
+    'Chicago Fire FC': t('Gregg Berhalter'), 'FC Cincinnati': t('Pat Noonan'), 'Colorado Rapids': t('Matt Wells'),
+    'Columbus Crew': t('Laurent Courtois (interim)'), 'FC Dallas': t('Eric Quill'), 'D.C. United': t('René Weiler'),
+    'Houston Dynamo FC': t('Ben Olsen'), 'Inter Miami CF': t('Kily González'), 'LA Galaxy': t('Greg Vanney'),
+    'Minnesota United FC': t('Cameron Knowles'), 'CF Montréal': t('Philippe Eullaffroy (interim)'), 'Nashville SC': t('B. J. Callaghan'),
+    'New England Revolution': t('Marko Mitrović'), 'New York City FC': t('Pascal Jansen'), 'Red Bull New York': t('Michael Bradley'),
+    'New York Red Bulls': t('Michael Bradley'), 'Orlando City SC': t('Martín Perelman (interim)'), 'Philadelphia Union': t('Ryan Richter (interim)'),
+    'Portland Timbers': t('Martí Cifuentes'), 'Real Salt Lake': t('Pablo Mastroeni'), 'San Diego FC': t('Mikey Varas'),
+    'San Jose Earthquakes': t('Bruce Arena'), 'Seattle Sounders FC': t('Brian Schmetzer'), 'Sporting Kansas City': t('Raphaël Wicky'),
+    'St. Louis City SC': t('Yoann Damet'), 'Toronto FC': t('Robin Fraser'), 'Vancouver Whitecaps FC': t('Jesper Sørensen'),
+  },
+  nll: {
+    'Buffalo Bandits': t('John Tavares'), 'Calgary Roughnecks': t('Josh Sanderson'), 'Colorado Mammoth': t('Pat Coyle'),
+    'Georgia Swarm': t('Ed Comeau'), 'Halifax Thunderbirds': t('Mike Accursi'), 'Las Vegas Desert Dogs': t('Shawn Williams'),
+    'Oshawa FireWolves': t('Glenn Clark'), 'Rochester Knighthawks': t('Randy Mearns'), 'San Diego Seals': t('Patrick Merrill'),
+    'Saskatchewan Rush': t('Jimmy Quinlan'), 'Toronto Rock': t('Matt Sawyer'), 'Vancouver Warriors': t('Curt Malawsky'),
+  },
+};
+const loose = (name) => String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/[^a-z ]/g, ' ').split(/\s+/).filter((w) => w && !['fc', 'sc', 'cf'].includes(w)).join(' ');
+export function staffFor(sport, abbr, name) {
+  if (STAFF[sport]?.[abbr]) return STAFF[sport][abbr];
+  const list = STAFF_BY_NAME[sport];
+  if (!list) return null;
+  const key = loose(name);
+  return Object.entries(list).find(([n]) => loose(n) === key)?.[1] || null;
+}
+
 // Which name goes with which award: coaches for coach awards, executives for executive / GM awards.
 export const STAFF_ROLE = {
   'nba:coy': 'coach', 'nba:eoy': 'exec',
   'nfl:coy': 'coach',
   'nhl:adams': 'coach', 'nhl:gm': 'exec',
   'mlb:almoy': 'coach', 'mlb:nlmoy': 'coach',
+  'mls:coy': 'coach', 'nll:coy': 'coach',
 };

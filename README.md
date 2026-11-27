@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Pick'em leagues and playoff brackets for you and your friends.</strong><br>
-  NFL · NBA · NHL · MLB, on the real schedule, with live scores and a leaderboard.
+  NFL · NBA · NHL · MLB · MLS · NLL, on the real schedule, with live scores and a leaderboard.
 </p>
 
 <p align="center">
@@ -18,13 +18,15 @@
 ## What it does
 
 - **Private leagues.** Start a league, share the invite link or 6-letter code, and you're playing. Only members can see a league.
-- **Real schedules.** Games, scores and results come in automatically. **NFL** leagues pick week by week. **NBA, NHL and MLB** leagues pick day by day.
+- **Real schedules.** Games, scores and results come in automatically. **NFL**, **MLS** and **NLL** leagues pick week by week (MLS lets you pick a draw). **NBA, NHL and MLB** leagues pick day by day.
 - **Fair picks.** Every game locks at its own start time, and nobody can see anyone else's picks for a game until it starts. The rules are enforced by the database, not just the website.
 - **Leaderboard.** One point per correct pick, a running season table, and a weekly winner.
 - **Playoff brackets.** A full bracket for each sport with the final in the middle, using each league's real format:
   - NFL: 7 seeds per conference, with a bye and re-seeding.
   - NBA and NHL: 8 seeds per conference, best-of-7 series.
   - MLB: 6 per league, with byes for the top two.
+  - MLS: 8 per conference, best-of-3 first round.
+  - NLL: top 8 overall, single-game quarterfinals then best-of-3 semis and Finals.
   League brackets lock when the playoffs start and score 1 / 2 / 4 / 8 points by round.
 - **🎲 Simulator and title odds.** Play out the bracket in one tap, or see each team's chances from thousands of simulated playoffs.
 - **Build your own bracket.** Choose which teams make the playoffs and their seeds (the NBA version includes the play-in tournament), then fill it out or simulate it.
@@ -65,10 +67,10 @@ A small, free-to-run stack with no build step:
 - Confidence points and upset bonuses as league scoring options
 - Survivor mode
 - Pick reminders before the first game of each slate
-- More sports (college football, WNBA, soccer)
+- More sports (college football, WNBA)
 - Plugging a real prediction model into the simulator
 
 ## Notes
 
-- Schedules, scores and standings come from ESPN's public scoreboard feed. It's unofficial and could change without notice. Pick Six isn't affiliated with ESPN, the NFL, NBA, NHL or MLB.
+- Schedules, scores and standings come from ESPN's public scoreboard feed. It's unofficial and could change without notice. Pick Six isn't affiliated with ESPN, the NFL, NBA, NHL, MLB, MLS or NLL.
 - This is a just-for-fun project: no money, no betting.

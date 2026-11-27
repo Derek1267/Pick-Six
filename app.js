@@ -11,7 +11,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 import * as BR from './bracket.js';
 import * as SEL from './selections.js';
 import { ICON, CAT_ICON, SURFACE, ILLO } from './icons.js';
-import { STAFF, STAFF_ROLE } from './staff.js';
+import { STAFF_ROLE, staffFor } from './staff.js';
 import { FAVOURITES, FAVOURITES_AS_OF, FAVOURITE_TITLE } from './favourites.js';
 
 const app = document.getElementById('app');
@@ -58,6 +58,9 @@ export const SPORTS = {
   nba: { name: 'NBA', daily: true, unit: 'day' },
   nhl: { name: 'NHL', daily: true, unit: 'day' },
   mlb: { name: 'MLB', daily: true, unit: 'day' },
+  // Soccer and lacrosse play a few times a week: one slate per Monday–Sunday week. MLS games can be drawn.
+  mls: { name: 'MLS', daily: true, unit: 'week', weekSlates: true, draws: true },
+  nll: { name: 'NLL', daily: true, unit: 'week', weekSlates: true },
 };
 const sportInfo = (sport) => SPORTS[sport] || SPORTS.nfl;
 
@@ -78,6 +81,14 @@ function weekLabel(type, week, sport = 'nfl') {
 const todayET = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date());
+
+// Monday of the week a date falls in ("2026-11-26" → "2026-11-23").
+function mondayOf(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const t = Date.UTC(y, m - 1, d);
+  const back = (new Date(t).getUTCDay() + 6) % 7;
+  return new Date(t - back * 864e5).toISOString().slice(0, 10);
+}
 
 function dayLabel(ymd) {
   const [y, m, d] = ymd.split('-').map(Number);
@@ -387,7 +398,7 @@ function renderSignIn(route) {
     <section class="hero">
       <p class="eyebrow">${joining ? "You've been invited to a league" : 'Pick’em & brackets for you and your friends'}</p>
       <h1>Pick winners. Talk trash. Climb the board.</h1>
-      <p class="lede">Start a private league for the NFL, NBA, NHL or MLB, pick games on the real schedule, and let the leaderboard settle the arguments.</p>
+      <p class="lede">Start a private league for the NFL, NBA, NHL, MLB, MLS or NLL, pick games on the real schedule, and let the leaderboard settle the arguments.</p>
     </section>
     <section class="card narrow">
       <h2>${joining ? 'Sign in to join' : 'Get started'}</h2>
@@ -472,7 +483,7 @@ function renderHow() {
       <section class="card">
         <h2 class="icon-head">${ICON.users}Leagues</h2>
         <ul>
-          <li>Start a private league for one sport (NFL, NBA, NHL or MLB) and share the invite link or 6-letter code.</li>
+          <li>Start a private league for one of six leagues (NFL, NBA, NHL, MLB, MLS or NLL) and share the invite link or 6-letter code.</li>
           <li>Only people in your league can see it, its picks or its standings.</li>
           <li>Start one in the off-season too: it's for the season ahead. Predictions and brackets open right away, and picks start when the schedule comes out.</li>
           <li>The league owner can rename it, remove players or delete it. Anyone can leave a league from <strong>Manage</strong>.</li>
@@ -492,7 +503,7 @@ function renderHow() {
       <section class="card">
         <h2 class="icon-head">${ICON.board}Scoring &amp; standings</h2>
         <ul>
-          <li>1 point for every correct pick. Ties and postponed games don't count either way.</li>
+          <li>1 point for every correct pick. Ties and postponed games don't count either way, except in <strong>MLS</strong>, where you can pick a draw.</li>
           <li><strong>Standings</strong> rank by total correct picks, then win percentage.</li>
           <li>Each week someone takes the <strong>weekly win</strong> (most correct that week, Monday to Sunday for daily sports). Ties share it.</li>
           <li>Scores update about every 15 minutes during games.</li>
@@ -510,7 +521,9 @@ function renderHow() {
           <li>🎲 <strong>Simulate</strong> plays out the bracket using team records and home advantage. <strong>Title odds</strong> come from thousands of simulated playoffs. It's a simple model, not a prediction you should bet on.</li>
         </ul>
         <p class="muted small">Formats: NFL 7 teams per conference (with a bye and re-seeding), NBA and NHL 8 teams with best-of-7 series
-          (the NHL's real division-based pairings are simplified), MLB 6 teams per league with byes for the top two.</p>
+          (the NHL's real division-based pairings are simplified), MLB 6 teams per league with byes for the top two,
+          MLS 8 teams per conference with a best-of-3 first round (the 8 v 9 wild card game is folded in),
+          and NLL the top 8 overall: single-game quarterfinals, then best-of-3 semifinals and Finals.</p>
       </section>
 
       <section class="card">
@@ -556,7 +569,7 @@ async function renderHome(stale) {
   const cards = leagues.map((l) => `
     <a class="league-card" href="#/league/${l.id}">
       <span class="league-name">${esc(l.name)}</span>
-      <span class="muted small"><span class="sport-tag">${esc(sportInfo(l.sport).name)}</span> ${l.league_members?.[0]?.count ?? 1} players</span>
+      <span class="muted small"><span class="sport-tag">${esc(sportInfo(l.sport).name)}</span> ${l.league_members?.[0]?.count ?? 1} player${(l.league_members?.[0]?.count ?? 1) === 1 ? '' : 's'}</span>
       <span class="arrow" aria-hidden="true">→</span>
     </a>`).join('');
 
@@ -578,7 +591,7 @@ async function renderHome(stale) {
           ${Object.entries(SPORTS).map(([key, info]) => `
             <label class="sport-option" title="${inSeason[key] ? '' : `Off-season: the league is for next season. Predictions open now; picks start with the schedule.`}">
               <input type="radio" name="sport" value="${key}" ${key === firstOpen ? 'checked' : ''}>
-              <span>${info.name}${inSeason[key] ? '' : ' <small>next season</small>'}</span></label>`).join('')}
+              <span>${info.name}<small>${inSeason[key] ? 'In season' : 'Next season'}</small></span></label>`).join('')}
         </fieldset>
         <button class="btn" type="submit">Create league</button>
       </form>
@@ -757,7 +770,8 @@ function groupSlates(games, sport) {
     const k = g.slate || weekKey(g.season_type, g.week);
     if (!slates.has(k)) {
       slates.set(k, { key: k, type: g.season_type, week: g.week, games: [],
-        label: daily ? dayLabel(k) : weekLabel(g.season_type, g.week, sport) });
+        label: sportInfo(sport).weekSlates ? weekLabel(g.season_type, g.week, sport)
+          : daily ? dayLabel(k) : weekLabel(g.season_type, g.week, sport) });
     }
     slates.get(k).games.push(g);
   }
@@ -768,7 +782,7 @@ function groupSlates(games, sport) {
 
 function defaultSlate(slates, sport) {
   if (sportInfo(sport).daily) {
-    const today = todayET();
+    const today = sportInfo(sport).weekSlates ? mondayOf(todayET()) : todayET();
     const upcoming = slates.find((s) => s.key >= today);
     // Today, unless everything today is already final — then the next day with games.
     if (upcoming?.key === today && upcoming.games.every((g) => g.status === 'post')) {
@@ -784,7 +798,7 @@ function defaultSlate(slates, sport) {
 
 // ----- Picks tab -----
 
-const seasonName = (league) => (sportInfo(league.sport).daily && league.sport !== 'mlb'
+const seasonName = (league) => (['nba', 'nhl', 'nll'].includes(league.sport)
   ? `${league.season - 1}–${String(league.season).slice(2)}` : String(league.season));
 
 async function picksHtml(league, members, games, route) {
@@ -831,7 +845,8 @@ async function picksHtml(league, members, games, route) {
       ${!open.length && !graded.length ? `<div class="muted">All games for this ${unit} are locked.</div>` : ''}
     </div>`;
 
-  const cards = wk.games.map((g) => gameCard(g, mine.get(g.id), picks, members, me)).join('');
+  const draws = !!sportInfo(league.sport).draws;
+  const cards = wk.games.map((g) => gameCard(g, mine.get(g.id), picks, members, me, draws)).join('');
 
   return nav + summary + `<div class="games">${cards}</div>`;
 }
@@ -859,7 +874,16 @@ function teamButton(g, side, myPick, locked) {
     </button>`;
 }
 
-function gameCard(g, myPick, picks, members, me) {
+// Soccer: a draw is a pick too.
+function drawButton(g, myPick, locked) {
+  const picked = myPick === 'tie';
+  const result = g.winner && picked ? (g.winner === 'tie' ? 'correct' : 'wrong') : '';
+  return `<button class="draw-btn ${picked ? 'picked' : ''} ${result} ${g.winner === 'tie' ? 'winner' : ''}" ${locked ? 'disabled' : ''}
+      data-game="${esc(g.id)}" data-pick="tie" aria-pressed="${picked}" aria-label="Pick a draw">
+      <span>Draw</span>${picked ? `<span class="badge">${result === 'correct' ? '✓' : result === 'wrong' ? '✗' : 'Pick'}</span>` : ''}</button>`;
+}
+
+function gameCard(g, myPick, picks, members, me, draws = false) {
   const locked = !isOpen(g);
   let status;
   if (g.status === 'post') status = `<span class="status final">${esc(g.status_detail || 'Final')}</span>`;
@@ -873,13 +897,15 @@ function gameCard(g, myPick, picks, members, me) {
     const gp = picks.filter((p) => p.game_id === g.id);
     const away = gp.filter((p) => p.pick === 'away');
     const home = gp.filter((p) => p.pick === 'home');
+    const tied = gp.filter((p) => p.pick === 'tie');
     const who = (list) => list.map((p) => `<span class="pill ${p.user_id === me ? 'me' : ''}">${esc(nameOf(members, p.user_id))}</span>`).join('') || '<span class="muted small">nobody</span>';
     const pct = gp.length ? Math.round((away.length / gp.length) * 100) : 50;
     reveal = gp.length ? `
       <div class="reveal">
         <div class="split" style="--pct:${pct}%"><span></span></div>
-        <div class="reveal-cols">
+        <div class="reveal-cols ${draws ? 'three' : ''}">
           <div>${who(away)}</div>
+          ${draws ? `<div class="mid">${tied.length ? who(tied) : ''}</div>` : ''}
           <div class="right">${who(home)}</div>
         </div>
       </div>` : '';
@@ -892,7 +918,7 @@ function gameCard(g, myPick, picks, members, me) {
       <div class="game-top">${status}</div>
       <div class="matchup">
         ${teamButton(g, 'away', myPick, locked)}
-        <span class="at">@</span>
+        ${draws ? drawButton(g, myPick, locked) : '<span class="at">@</span>'}
         ${teamButton(g, 'home', myPick, locked)}
       </div>
       ${reveal}
@@ -901,15 +927,15 @@ function gameCard(g, myPick, picks, members, me) {
 
 async function makePick(league, gameId, side, btn) {
   const card = btn.closest('.matchup');
-  const prev = card.querySelector('.team.picked');
+  const prev = card.querySelector('.team.picked, .draw-btn.picked');
   if (prev === btn) return;
   // Optimistic update
-  card.querySelectorAll('.team').forEach((b) => {
+  card.querySelectorAll('.team, .draw-btn').forEach((b) => {
     b.classList.toggle('picked', b === btn);
     b.setAttribute('aria-pressed', b === btn);
     b.querySelector('.badge')?.remove();
   });
-  btn.insertAdjacentHTML('beforeend', '<span class="badge">Your pick</span>');
+  btn.insertAdjacentHTML('beforeend', `<span class="badge">${side === 'tie' ? 'Pick' : 'Your pick'}</span>`);
   btn.closest('.game').querySelector('.nudge')?.remove();
 
   const { error } = await sb.from('picks').upsert(
@@ -1267,7 +1293,7 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     return list.length ? list : teams;
   };
   const staffRole = (sheet) => STAFF_ROLE[sheet.qid];
-  const staffName = (sheet, abbr) => { const r = staffRole(sheet); return r ? STAFF[sport]?.[abbr]?.[r] || '' : ''; };
+  const staffName = (sheet, abbr) => { const r = staffRole(sheet); return r ? staffFor(sport, abbr, teams.find((t) => t.abbr === abbr)?.name)?.[r] || '' : ''; };
 
   let active = null;     // { qid, flat, mode: 'pick' | 'answer' } — the spot being filled in the popup
   let resultsFor = null; // qid the owner is entering results for
@@ -1457,10 +1483,10 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     return `
       ${intro('star', 'Pick the full roster: 1 point for every player who makes it, injury replacements included.')}
       ${leaderboard()}
-      <div class="side-switch" role="tablist" aria-label="Choose a side">
+      ${sheets.length < 2 ? '' : `<div class="side-switch" role="tablist" aria-label="Choose a side">
         ${sheets.map((s) => `<button role="tab" aria-selected="${s.qid === sheet.qid}" class="${s.qid === sheet.qid ? 'on' : ''}" data-side="${s.qid}">
           ${esc(s.side)}<span class="count">${mine(s).filter(Boolean).length}/${s.size}</span></button>`).join('')}
-      </div>
+      </div>`}
       <article class="roster" style="--base:${Math.max(7, sheet.layout?.groups[0].rows[0].length || 0)}">
         <header class="roster-head"><h3>${esc(sheet.title)}</h3><span class="muted small">${filled} of ${sheet.size} picked</span><span class="pill ${cls}">${label}</span></header>
         ${rosterBody(sheet)}
@@ -1674,6 +1700,8 @@ const PLAYOFF_LINES = {
   nfl: { playoff: 7 },
   nba: { playoff: 6, playIn: 10 },
   nhl: { playoff: 8 },
+  mls: { playoff: 9 },
+  nll: { playoff: 8 },
   mlb: { playoff: 6 },
 };
 
@@ -1681,7 +1709,7 @@ async function mountStandings(root, league, members, stale) {
   const me = state.session.user.id;
   const isOwner = league.created_by === me;
   const sport = league.sport;
-  const confs = BR.formatOf(sport).conferences;
+  const confs = BR.tablesOf(sport);
   const qidOf = (c) => `${sport}:standings:${c}`;
   const qids = confs.map(qidOf);
 
@@ -1791,9 +1819,9 @@ async function mountStandings(root, league, members, stale) {
   const draw = () => {
     root.innerHTML = `
       <p class="lede-sm">Predict where every team finishes. 3 points for the exact spot, 1 point for one spot off, ${started ? 'scored live against today’s standings' : 'scored live once the season starts'}.
-        ${isOwner ? 'Lock each side before the season gets going.' : 'Everyone’s picks show once the owner locks them.'}</p>
+        ${isOwner ? `Lock ${confs.length > 1 ? 'each side' : 'it'} before the season gets going.` : 'Everyone’s picks show once the owner locks them.'}</p>
       ${leaderboard()}
-      <div class="standings-grid">${confs.map(list).join('')}</div>`;
+      <div class="standings-grid ${confs.length === 1 ? 'one' : ''}">${confs.map(list).join('')}</div>`;
   };
 
   root.onclick = async (e) => {
@@ -1845,7 +1873,7 @@ async function seasonStarted(league) {
 
 async function myStandingsPrediction(league) {
   const sport = league.sport;
-  const confs = BR.formatOf(sport).conferences;
+  const confs = BR.tablesOf(sport);
   const { data } = await sb.from('award_picks').select('question_id, players').eq('league_id', league.id)
     .eq('user_id', state.session.user.id).in('question_id', confs.map((c) => `${sport}:standings:${c}`));
   const out = {};
@@ -1856,7 +1884,8 @@ async function myStandingsPrediction(league) {
 // ----- Predictions hub ---------------------------------------------------------
 
 async function mountPredictions(league, members, route, stale) {
-  const sub = ['standings', 'awards', 'allstars', 'yearend'].includes(route.sub) ? route.sub : 'standings';
+  const subs = ['standings', 'awards', 'yearend', ...((SEL.ALLSTARS[league.sport] || []).length ? ['allstars'] : [])];
+  const sub = subs.includes(route.sub) ? route.sub : 'standings';
   const root = document.getElementById('predict-root');
   if (sub === 'standings') return mountStandings(root, league, members, stale);
   if (sub === 'awards') return mountSheets(root, league, members, stale, { kind: 'awards', sheets: SEL.AWARDS[league.sport] || [] });
@@ -1871,7 +1900,7 @@ function predictionsNav(league, route) {
     ['awards', 'Awards', 'trophy'],
     ['allstars', SEL.ALLSTAR_NAME[league.sport] || 'All-Stars', 'star'],
     ['yearend', 'Year-end teams', 'medal'],
-  ];
+  ].filter(([k]) => k !== 'allstars' || (SEL.ALLSTARS[league.sport] || []).length);
   return `<nav class="subnav" aria-label="Predictions">${items.map(([k, label, icon]) =>
     `<a href="#/league/${league.id}?tab=predict&sub=${k}" class="${sub === k ? 'on' : ''}" ${sub === k ? 'aria-current="page"' : ''}>${ICON[icon]}${esc(label)}</a>`).join('')}</nav>`;
 }
@@ -1914,7 +1943,10 @@ async function mountBracket(league, members, games, stale, route) {
   const sport = league.sport;
   const F = BR.formatOf(sport);
   const [c0, c1] = F.conferences;
-  const fieldSize = F.teams + (F.playIn ? 2 : 0); // NBA "Build your own" includes the play-in (seeds 7–10)
+  const fieldSize = BR.fieldSizeOf(sport); // NBA "Build your own" includes the play-in (seeds 7–10)
+  const tables = BR.tablesOf(sport);        // where teams are chosen from (NLL: one table)
+  const label = (c) => BR.confLabel(sport, c);
+  const sideRounds = F.rounds.length - 1;   // columns on each side of the final
 
   const [seedRes, stateRes, picksRes, teamRows] = await Promise.all([
     sb.from('playoff_seeds').select('*').eq('sport', sport).eq('season', league.season),
@@ -1942,15 +1974,18 @@ async function mountBracket(league, members, games, stale, route) {
 
   // ----- build your own: choose the field, then fill the bracket (saved on this device) -----
   const funKey = `pickSix.funBracket2.${sport}`;
-  const fieldFromToday = () => Object.fromEntries(F.conferences.map((c) => [c, todayOrder(c).slice(0, fieldSize)]));
+  const fieldFromToday = () => Object.fromEntries(tables.map((c) => [c, todayOrder(c).slice(0, fieldSize)]));
   let fun = lsGet(funKey, null);
-  const validField = (f) => f && F.conferences.every((c) => Array.isArray(f[c]) && f[c].length === fieldSize
+  const validField = (f) => f && tables.every((c) => Array.isArray(f[c]) && f[c].length === fieldSize
     && f[c].every((a) => !a || !knowsConferences || teamByAbbr.get(a)?.conference === c));
   if (!fun || !validField(fun.field)) fun = { field: fieldFromToday(), picks: {}, step: 'field' };
   const persistFun = () => lsSet(funKey, fun);
-  const fieldFull = () => F.conferences.every((c) => fun.field[c].every(Boolean));
-  const funSeeds = () => Object.fromEntries(F.conferences.map((c) => [c, fun.field[c].filter(Boolean)
-    .map((abbr, i) => ({ ...(teamByAbbr.get(abbr) || { abbr, team_name: abbr, wins: 0, losses: 0, ties: 0 }), seed: i + 1 }))]));
+  const fieldFull = () => tables.every((c) => fun.field[c].every(Boolean));
+  const funSeeds = () => {
+    const seeded = Object.fromEntries(tables.map((c) => [c, fun.field[c].filter(Boolean)
+      .map((abbr, i) => ({ ...(teamByAbbr.get(abbr) || { abbr, team_name: abbr, wins: 0, losses: 0, ties: 0 }), seed: i + 1 }))]));
+    return F.single ? BR.splitSingle(sport, seeded[F.single]) : seeded;
+  };
 
   let mode = route.mode === 'fun' || !haveSeeds ? 'fun' : 'league';
   let busy = false;
@@ -2046,17 +2081,18 @@ async function mountBracket(league, members, games, stale, route) {
     const champ = b.F.winner;
     const champOdds = champ ? oddsRows()?.find((r) => r.team.abbr === champ.abbr)?.champ : null;
     const col = (cls, inner) => `<div class="round ${cls}">${inner}</div>`;
+    const ladder = Array.from({ length: sideRounds }, (_, i) => i);
     return `
       ${playInHtml(b)}
       <div class="bracket-scroll" tabindex="0" aria-label="Playoff bracket (scrolls sideways)">
-        <div class="bracket-full">
-          <div class="bf-conf left">${esc(c0)}</div>
-          <div class="bf-conf center">${esc(F.rounds[3])}</div>
-          <div class="bf-conf right">${esc(c1)}</div>
-          ${[0, 1, 2].map((i) => roundLabel(i)).join('')}${roundLabel(3, 'Final')}${[2, 1, 0].map((i) => roundLabel(i)).join('')}
+        <div class="bracket-full" style="--side:${sideRounds}">
+          <div class="bf-conf left">${esc(label(c0))}</div>
+          <div class="bf-conf center">${esc(F.rounds[sideRounds])}</div>
+          <div class="bf-conf right">${esc(label(c1))}</div>
+          ${ladder.map((i) => roundLabel(i)).join('')}${roundLabel(sideRounds, 'Final')}${[...ladder].reverse().map((i) => roundLabel(i)).join('')}
           ${col('', byeCards(b[c0]) + b[c0].r1.map((g) => matchup(g)).join(''))}
           ${col('', b[c0].r2.map((g) => matchup(g)).join(''))}
-          ${col('', matchup(b[c0].r3))}
+          ${b[c0].r3 ? col('', matchup(b[c0].r3)) : ''}
           ${col('final-col', `${matchup(b.F)}
             <div class="champion ${champ ? 'crowned' : ''}">
               ${champ ? `${champ.logo ? `<img src="${esc(champ.logo)}" alt="" width="44" height="44">` : ''}
@@ -2064,7 +2100,7 @@ async function mountBracket(league, members, games, stale, route) {
                 ${champOdds != null ? `<span class="muted small">${pct(champOdds)} title odds</span>` : ''}`
                 : '<span class="muted small">Your champion shows here</span>'}
             </div>`)}
-          ${col('', matchup(b[c1].r3))}
+          ${b[c1].r3 ? col('', matchup(b[c1].r3)) : ''}
           ${col('', b[c1].r2.map((g) => matchup(g)).join(''))}
           ${col('', byeCards(b[c1]) + b[c1].r1.map((g) => matchup(g)).join(''))}
         </div>
@@ -2078,14 +2114,16 @@ async function mountBracket(league, members, games, stale, route) {
       <p class="muted small">How far each team gets in thousands of simulated playoffs, using records and home advantage${F.bestOf[0] > 1 ? ', played as full series' : ''}. A simple model, not a forecast.</p></div></header>`;
     if (!rows) return `<section class="panel odds-panel">${head}${skeleton(4)}</section>`;
     const logoOf = (abbr) => allTeams.find((t) => t.abbr === abbr);
-    const cols = [[F.rounds[1], 'r2'], [F.rounds[2], 'r3'], [F.rounds[3], 'final'], ['Champion', 'champ']];
+    const cols = sideRounds === 3
+      ? [[F.rounds[1], 'r2'], [F.rounds[2], 'r3'], [F.rounds[3], 'final'], ['Champion', 'champ']]
+      : [[F.rounds[1], 'r2'], [F.rounds[2], 'final'], ['Champion', 'champ']];
     const cell = (r, key, label) => {
       const v = r[key];
       const tint = Math.round(Math.sqrt(v) * 100); // sqrt so small chances still show
       return `<td class="heat ${v >= 0.42 ? 'deep' : ''}" style="--t:${tint}%" title="${esc(`${r.team.abbr} reaches ${label}: ${pct(v)}`)}">${pct(v)}</td>`;
     };
     const table = (conf) => {
-      const list = rows.filter((r) => r.conference === conf).sort((a, b) => b.champ - a.champ || b.final - a.final);
+      const list = rows.filter((r) => F.single || r.conference === conf).sort((a, b) => b.champ - a.champ || b.final - a.final);
       return `<div class="odds-conf"><h4>${esc(conf)}</h4>
         <table class="odds"><thead><tr><th>Team</th>${cols.map(([label]) => `<th class="num">${esc(label)}</th>`).join('')}</tr></thead>
         <tbody>${list.map((r) => `<tr>
@@ -2093,7 +2131,7 @@ async function mountBracket(league, members, games, stale, route) {
           ${cols.map(([label, key]) => cell(r, key, label)).join('')}</tr>`).join('')}</tbody></table></div>`;
     };
     return `<section class="panel odds-panel">${head}
-      <div class="odds-grid">${F.conferences.map(table).join('')}</div>
+      <div class="odds-grid ${F.single ? 'one' : ''}">${(F.single ? [F.single] : F.conferences).map(table).join('')}</div>
       <p class="odds-key muted small"><span class="key-ramp"></span>Less likely → more likely</p></section>`;
   };
 
@@ -2146,7 +2184,7 @@ async function mountBracket(league, members, games, stale, route) {
         <button class="btn small secondary" data-fill="prediction">Use my standings prediction</button>
         <button class="btn small ghost" data-fill="clear">Clear</button>
       </div>
-      <div class="field-grid">${conf(c0)}${conf(c1)}</div>
+      <div class="field-grid ${tables.length === 1 ? 'one' : ''}">${tables.map(conf).join('')}</div>
       <div class="step-next"><button class="btn" data-step="bracket" ${fieldFull() ? '' : 'disabled'}>Fill out the bracket</button>
         ${fieldFull() ? '' : '<span class="muted small">Fill every seed first.</span>'}</div>`;
   };
@@ -2162,7 +2200,7 @@ async function mountBracket(league, members, games, stale, route) {
       return `<p class="note strong">Brackets are open: ${n} of ${total()} picked.
         ${firstKick ? `They lock when the playoffs start, ${fmtKickoff(firstKick)}.` : 'They lock when the playoffs start.'} <span class="save-note">${saveNote}</span></p>`;
     }
-    return `<p class="note">Brackets are locked. Points per correct winner: ${['R1', 'R2', 'R3', 'F'].map((k, i) => `${esc(F.rounds[i])} ${BR.ROUND_POINTS[k]}`).join(', ')}.</p>`;
+    return `<p class="note">Brackets are locked. Points per correct winner: ${(sideRounds === 3 ? ['R1', 'R2', 'R3', 'F'] : ['R1', 'R2', 'F']).map((k, i) => `${esc(F.rounds[i])} ${BR.ROUND_POINTS[k]}`).join(', ')}.</p>`;
   };
 
   const draw = () => {
@@ -2181,7 +2219,7 @@ async function mountBracket(league, members, games, stale, route) {
         </div>` : ''}
       </div>
       ${mode === 'fun' ? `<p class="lede-sm">${showField
-        ? `Pick the ${fieldSize} teams per ${sport === 'mlb' ? 'league' : 'conference'} that make it${F.playIn ? ', including the four in the play-in tournament' : ''}, in seed order. Saved on this device. It doesn’t count in your league.`
+        ? `Pick the ${fieldSize} teams${F.single ? '' : ` per ${sport === 'mlb' ? 'league' : 'conference'}`} that make it${F.playIn ? ', including the four in the play-in tournament' : ''}, in seed order. Saved on this device. It doesn’t count in your league.`
         : 'Play out your bracket. Tap a team to advance it, or simulate.'}</p>` : banner()}
       ${showField ? fieldHtml() : `
         ${bracketStandings()}
@@ -2210,12 +2248,12 @@ async function mountBracket(league, members, games, stale, route) {
   };
 
   const fillField = async (how) => {
-    if (how === 'clear') fun.field = Object.fromEntries(F.conferences.map((c) => [c, Array(fieldSize).fill('')]));
+    if (how === 'clear') fun.field = Object.fromEntries(tables.map((c) => [c, Array(fieldSize).fill('')]));
     if (how === 'today') fun.field = fieldFromToday();
     if (how === 'prediction') {
       const pred = await myStandingsPrediction(league);
       if (!pred) { toast('Save a final standings prediction first (Predictions tab).', 'error'); return; }
-      fun.field = Object.fromEntries(F.conferences.map((c) => [c, [...pred[c], ...todayOrder(c)].filter((a, i, arr) => arr.indexOf(a) === i).slice(0, fieldSize)]));
+      fun.field = Object.fromEntries(tables.map((c) => [c, [...pred[c], ...todayOrder(c)].filter((a, i, arr) => arr.indexOf(a) === i).slice(0, fieldSize)]));
     }
     fun.picks = {};
     persistFun();
@@ -2281,7 +2319,7 @@ app.addEventListener('click', (e) => {
 
 const INTRO_KEY = 'pickSix.introSeen';
 const INTRO_STEPS = [
-  ['users', 'Start a league', 'Make a private league for the NFL, NBA, NHL or MLB and send friends the invite link.'],
+  ['users', 'Start a league', 'Make a private league for the NFL, NBA, NHL, MLB, MLS or NLL and send friends the invite link.'],
   ['picks', 'Pick winners', 'Choose the winner of every real game. Each pick locks when its game starts.'],
   ['board', 'Climb the leaderboard', 'One point per correct pick. The site keeps score as results come in.'],
   ['bracket', 'Fill out a bracket', 'Call the playoffs round by round, or simulate them for fun.'],

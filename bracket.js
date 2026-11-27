@@ -1,4 +1,4 @@
-// Pick Six — playoff bracket logic for NFL, NBA, NHL and MLB.
+// Pick Six — playoff bracket logic for NFL, NBA, NHL, MLB, MLS and NLL.
 // No DOM here, so it can be tested in Node.
 //
 // A bracket is a plain object of slot → team abbreviation:
@@ -47,7 +47,42 @@ export const FORMATS = {
     r2: [['bye', 1, 1], ['bye', 2, 0]], // [bye, seed, R1 game index]
     byes: [1, 2],
   },
+  mls: {
+    conferences: ['East', 'West'],
+    teams: 8, // simplified: the 8 v 9 wild card is folded into seed 8
+    rounds: ['Round One', 'Conf. Semis', 'Conf. Final', 'MLS Cup'],
+    bestOf: [3, 1, 1, 1],
+    r1: [[1, 8], [4, 5], [3, 6], [2, 7]],
+    r2: [[0, 1], [2, 3]],
+    byes: [],
+  },
+  // NLL: one table, top 8 make it. Drawn as two halves of the bracket (1/8 v 4/5, 2/7 v 3/6),
+  // so the semifinal winners meet in the NLL Finals. Three rounds, no conference final.
+  nll: {
+    conferences: ['A', 'B'],
+    labels: { A: 'Top half', B: 'Bottom half' },
+    single: 'NLL',
+    halves: { A: [1, 4, 5, 8], B: [2, 3, 6, 7] },
+    teams: 4, // per half
+    rounds: ['Quarterfinals', 'Semifinals', 'NLL Finals'],
+    bestOf: [1, 3, 3],
+    r1: { A: [[1, 8], [4, 5]], B: [[2, 7], [3, 6]] },
+    r2: [[0, 1]],
+    byes: [],
+  },
 };
+
+// The standings tables a sport is ranked in (NLL: one table; everyone else: two conferences).
+export const tablesOf = (sport) => { const f = formatOf(sport); return f.single ? [f.single] : f.conferences; };
+// Playoff teams chosen per table in "Build your own".
+export const fieldSizeOf = (sport) => { const f = formatOf(sport); return f.single ? f.teams * 2 : f.teams + (f.playIn ? 2 : 0); };
+export const confLabel = (sport, c) => formatOf(sport).labels?.[c] || c;
+const pairsFor = (f, conf) => (Array.isArray(f.r1) ? f.r1 : f.r1[conf]);
+// One seeded list (seeds 1–8) → the two halves of a single-table bracket.
+export function splitSingle(sport, list) {
+  const f = formatOf(sport);
+  return Object.fromEntries(f.conferences.map((c) => [c, list.filter((t) => f.halves[c].includes(t.seed))]));
+}
 
 export const ROUND_KEYS = ['PI', 'R1', 'R2', 'R3', 'F'];
 export const ROUND_POINTS = { PI: 0, R1: 1, R2: 2, R3: 4, F: 8 };
@@ -56,13 +91,20 @@ export const formatOf = (sport) => FORMATS[sport] || FORMATS.nfl;
 
 export function maxPoints(sport) {
   const f = formatOf(sport);
-  const r1 = f.r1.length * 2; // both conferences
-  return r1 * ROUND_POINTS.R1 + 4 * ROUND_POINTS.R2 + 2 * ROUND_POINTS.R3 + ROUND_POINTS.F;
+  const r1 = f.conferences.reduce((n, c) => n + pairsFor(f, c).length, 0);
+  const r2 = (f.r2 ? f.r2.length : 2) * 2;
+  const r3 = f.rounds.length === 4 ? 2 : 0;
+  return r1 * ROUND_POINTS.R1 + r2 * ROUND_POINTS.R2 + r3 * ROUND_POINTS.R3 + ROUND_POINTS.F;
 }
 
 // playoff_seeds rows → { [conference]: [team...] } sorted by seed
 export function seedsByConference(rows, sport) {
   const f = formatOf(sport);
+  if (f.single) {
+    const list = (rows || []).filter((r) => r.conference === f.single)
+      .map((r) => ({ ...r, abbr: r.team_abbr ?? r.abbr, team_name: r.team_name ?? r.abbr })).sort((a, b) => a.seed - b.seed);
+    return splitSingle(sport, list);
+  }
   const out = Object.fromEntries(f.conferences.map((c) => [c, []]));
   for (const r of rows || []) {
     if (out[r.conference]) {
@@ -118,7 +160,7 @@ export function buildBracket(sport, seeds, picks = {}) {
       bySeed = (n) => (n === 7 ? seven : n === 8 ? eight : seedTeam(n));
     }
 
-    const r1 = f.r1.map(([h, a], i) => game(id('R1', i), bySeed(h), bySeed(a), picks, f.bestOf[0]));
+    const r1 = pairsFor(f, conf).map(([h, a], i) => game(id('R1', i), bySeed(h), bySeed(a), picks, f.bestOf[0]));
     const w1 = r1.map((g) => g.winner);
 
     let r2;
@@ -136,17 +178,25 @@ export function buildBracket(sport, seeds, picks = {}) {
         : game(id('R2', i), w1[pair[0]], w1[pair[1]], picks, f.bestOf[1])));
     }
 
-    const [a, b] = r2.map((g) => g.winner);
-    const r3 = game(id('R3', 0), a || null, b || null, picks, f.bestOf[2]);
-    out[conf] = { byes: f.byes.map(bySeed).filter(Boolean), playIn, r1, r2, r3 };
+    // Three-round formats (NLL): the semifinal winner goes straight to the final.
+    let r3 = null;
+    let champ;
+    if (f.rounds.length === 4) {
+      const [a, b] = r2.map((g) => g.winner);
+      r3 = game(id('R3', 0), a || null, b || null, picks, f.bestOf[2]);
+      champ = r3.winner;
+    } else {
+      champ = r2[0].winner;
+    }
+    out[conf] = { byes: f.byes.map(bySeed).filter(Boolean), playIn, r1, r2, r3, champ: champ || null };
   }
   const [c0, c1] = f.conferences;
-  out.F = game('F', out[c0].r3.winner, out[c1].r3.winner, picks, f.bestOf[3], true);
+  out.F = game('F', out[c0].champ, out[c1].champ, picks, f.bestOf[f.bestOf.length - 1], true);
   return out;
 }
 
 export const allGames = (sport, b) => [
-  ...formatOf(sport).conferences.flatMap((c) => [...(b[c].playIn || []), ...b[c].r1, ...b[c].r2, b[c].r3]),
+  ...formatOf(sport).conferences.flatMap((c) => [...(b[c].playIn || []), ...b[c].r1, ...b[c].r2, ...(b[c].r3 ? [b[c].r3] : [])]),
   b.F,
 ];
 
@@ -164,8 +214,11 @@ export function cleanPicks(sport, seeds, picks) {
   return current;
 }
 
-export const totalGames = (sport, seeds = null) =>
-  formatOf(sport).r1.length * 2 + 4 + 2 + 1 + (seeds && hasPlayIn(seeds, sport) ? 6 : 0);
+export const totalGames = (sport, seeds = null) => {
+  const f = formatOf(sport);
+  const r1 = f.conferences.reduce((n, c) => n + pairsFor(f, c).length, 0);
+  return r1 + (f.r2 ? f.r2.length : 2) * 2 + (f.rounds.length === 4 ? 2 : 0) + 1 + (seeds && hasPlayIn(seeds, sport) ? 6 : 0);
+};
 export const pickCount = (sport, seeds, picks) =>
   allGames(sport, buildBracket(sport, seeds, picks)).filter((g) => g.winner).length;
 
@@ -240,7 +293,7 @@ export function odds(sport, seeds, runs = 10000, rng = Math.random) {
     const b = buildBracket(sport, seeds, simulate(sport, seeds, {}, rng));
     for (const c of f.conferences) {
       for (const g of b[c].r2) { bump(g.home, 'r2'); bump(g.away, 'r2'); }
-      bump(b[c].r3.home, 'r3'); bump(b[c].r3.away, 'r3');
+      if (b[c].r3) { bump(b[c].r3.home, 'r3'); bump(b[c].r3.away, 'r3'); }
     }
     bump(b.F.home, 'final'); bump(b.F.away, 'final'); bump(b.F.winner, 'champ');
   }

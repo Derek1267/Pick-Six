@@ -62,6 +62,13 @@ export const SURFACE = {
   field: art('0 0 900 400', `
     <rect x="3" y="3" width="894" height="394"/>
     ${[50, 100, 150, 200, 250, 300, 350].map((y) => `<path d="M3 ${y}h894" stroke-width="2"/>`).join('')}`),
+  // Soccer pitch, attacking up: the near goal at the bottom.
+  pitch: art('0 0 600 640', `
+    <rect x="4" y="4" width="592" height="632"/>
+    <path d="M4 4h592"/><circle cx="300" cy="4" r="80"/>
+    <rect x="150" y="520" width="300" height="116"/><rect x="230" y="590" width="140" height="46"/>
+    <path d="M240 520a70 70 0 0 1 120 0"/>
+    <rect x="150" y="4" width="300" height="80"/>`),
   // Diamond with the outfield fence at the top.
   diamond: art('0 0 500 520', `
     <path d="M6 250A320 320 0 0 1 494 250"/>

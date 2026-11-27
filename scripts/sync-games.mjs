@@ -2,7 +2,7 @@
 // Pick Six — pulls real schedules, scores and playoff seeds from ESPN's public
 // scoreboard/standings feeds and saves them into Supabase.
 //
-// Sports: nfl (weekly slates), nba, nhl, mlb (daily slates).
+// Sports: nfl (weekly slates), nba, nhl, mlb (daily slates), mls, nll (Monday–Sunday slates by date).
 //
 // Usage:
 //   node scripts/sync-games.mjs                  # every sport: recent + upcoming games
@@ -44,7 +44,32 @@ export const SPORTS = {
     conferences: [['AL', ['AMERICAN LEAGUE', ' AL']], ['NL', ['NATIONAL LEAGUE', ' NL']]],
     playoffTeams: 6,
   },
+  mls: {
+    path: 'soccer/usa.1',
+    mode: 'daily',
+    slateBy: 'week',
+    conferences: [['East', ['EASTERN', 'EAST']], ['West', ['WESTERN', 'WEST']]],
+    playoffTeams: 8,
+  },
+  nll: {
+    path: 'lacrosse/nll',
+    mode: 'daily',
+    slateBy: 'week',
+    single: 'NLL', // one standings table, no conferences
+    conferences: [],
+    playoffTeams: 8,
+  },
 };
+
+// Soccer feeds use league-specific season type numbers; read the slug instead.
+function seasonTypeOf(season) {
+  const t = Number(season?.type);
+  if (t >= 1 && t <= 4) return t;
+  const slug = String(season?.slug || '').toLowerCase();
+  if (slug.includes('regular')) return 2;
+  if (/playoff|cup|final|round|semifinal|quarterfinal/.test(slug)) return 3;
+  return null;
+}
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -86,6 +111,12 @@ export const weekIndexOf = (ymd) => {
   return Math.floor((Date.UTC(y, m - 1, d) - WEEK_EPOCH) / (7 * 864e5));
 };
 
+const mondayOf = (ymd) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const t = Date.UTC(y, m - 1, d);
+  return new Date(t - ((new Date(t).getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10);
+};
+
 const ymdCompact = (d) => d.toISOString().slice(0, 10).replaceAll('-', '');
 const addDays = (d, n) => new Date(d.getTime() + n * 864e5);
 
@@ -110,15 +141,17 @@ export function toGameRow(event, sport) {
   // Postponed/cancelled games come back as "post" but not completed — leave ungraded.
   if (state === 'post' && statusType.completed !== false && homeScore !== null && awayScore !== null) {
     winner = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'tie';
+    // Level on goals but decided on penalties (soccer playoffs): the feed flags the winner.
+    if (winner === 'tie' && (home.winner === true || away.winner === true)) winner = home.winner === true ? 'home' : 'away';
   }
 
   const record = (c) => c.records?.find((r) => r.type === 'total' || r.name === 'overall')?.summary
     ?? c.records?.[0]?.summary ?? null;
 
   const startIso = new Date(event.date).toISOString();
-  const seasonType = event.season?.type;
+  const seasonType = seasonTypeOf(event.season);
   const daily = SPORTS[sport].mode === 'daily';
-  const slateDay = etDate(startIso);
+  const slateDay = SPORTS[sport].slateBy === 'week' ? mondayOf(etDate(startIso)) : etDate(startIso);
 
   return {
     id: `${sport === 'nfl' ? '' : `${sport}-`}${event.id}`, // NFL ids kept as-is for existing data
@@ -166,7 +199,14 @@ const stat = (entry, ...names) => {
   return null;
 };
 
+// The groups that hold whole conferences (or the whole league, for single-table sports).
+function conferenceGroups(data, sport) {
+  if (SPORTS[sport].single) return [data];
+  return (data.children || []).flatMap((g) => (conferenceOf(g, sport) ? [g] : (g.children || [])));
+}
+
 function conferenceOf(group, sport) {
+  if (SPORTS[sport].single) return SPORTS[sport].single;
   const text = ` ${group.abbreviation || ''} ${group.name || ''} `.toUpperCase();
   for (const [key, words] of SPORTS[sport].conferences) {
     if (words.some((w) => text.includes(w))) return key;
@@ -184,8 +224,7 @@ function entriesUnder(group) {
 export function seedsFromStandings(data, season, sport) {
   const cfg = SPORTS[sport];
   const rows = [];
-  const groups = (data.children || []).flatMap((g) => (conferenceOf(g, sport) ? [g] : (g.children || [])));
-  for (const group of groups) {
+  for (const group of conferenceGroups(data, sport)) {
     const conference = conferenceOf(group, sport);
     if (!conference) continue;
     const teams = entriesUnder(group).map((e) => ({
@@ -225,8 +264,7 @@ export function seedsFromStandings(data, season, sport) {
 // Every team in the standings, with its conference → rows for the teams table.
 export function teamsFromStandings(data, sport) {
   const rows = [];
-  const groups = (data.children || []).flatMap((g) => (conferenceOf(g, sport) ? [g] : (g.children || [])));
-  for (const group of groups) {
+  for (const group of conferenceGroups(data, sport)) {
     const conference = conferenceOf(group, sport);
     if (!conference) continue;
     // Remember each team's division when the feed nests divisions under conferences.
@@ -453,7 +491,7 @@ async function syncSport(sport) {
   if (standings) {
     teams = teamsFromStandings(standings, sport);
     // The default standings are conference-level; ask for division-level ones to learn divisions.
-    if (!STANDINGS_FIXTURE && teams.length && teams.every((t) => !t.division)) {
+    if (!STANDINGS_FIXTURE && !cfg.single && teams.length && teams.every((t) => !t.division)) {
       try {
         const url = new URL(`https://site.api.espn.com/apis/v2/sports/${cfg.path}/standings`);
         url.searchParams.set('season', season);
@@ -479,7 +517,7 @@ async function syncSport(sport) {
       console.warn(`[${sport}] skipping players: ${err.message}`);
     }
   }
-  const fullField = seeds.length === cfg.playoffTeams * 2;
+  const fullField = seeds.length === cfg.playoffTeams * (cfg.single ? 1 : 2);
   if (seeds.length) console.log(`[${sport}] ${seeds.length} playoff seeds${fullField ? '' : ' (incomplete — not saved)'}`);
 
   if (DRY_RUN) {

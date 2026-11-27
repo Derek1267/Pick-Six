@@ -114,6 +114,35 @@ export const AWARDS = {
     award('asgmvp', 'All-Star Game MVP', 'Ted Williams Award', { cat: 'events' }),
     award('clemente', 'Roberto Clemente Award', null, { cat: 'character' }),
   ],
+  mls: [
+    award('mvp', 'Most Valuable Player', 'Landon Donovan MVP', { cat: 'season' }),
+    award('gk', 'Goalkeeper of the Year', null, { cat: 'season', pos: ['G', 'GK'] }),
+    award('defender', 'Defender of the Year', null, { cat: 'season' }),
+    award('young', 'Young Player of the Year', 'Age 22 and under', { cat: 'season' }),
+    award('newcomer', 'Newcomer of the Year', 'New to MLS', { cat: 'season' }),
+    award('comeback', 'Comeback Player of the Year', null, { cat: 'season' }),
+    award('boot', 'Golden Boot', 'Most goals', { cat: 'stats' }),
+    award('assists', 'Assists leader', 'Most assists', { cat: 'stats' }),
+    teamAward('coy', 'Coach of the Year', 'Sigi Schmid Award', { cat: 'staff' }),
+    award('cupmvp', 'MLS Cup MVP', null, { cat: 'post' }),
+    award('goal', 'Goal of the Year', null, { cat: 'events' }),
+    award('asgmvp', 'All-Star Game MVP', null, { cat: 'events' }),
+    award('humanitarian', 'Humanitarian of the Year', null, { cat: 'character' }),
+  ],
+  nll: [
+    award('mvp', 'Most Valuable Player', null, { cat: 'season' }),
+    award('roy', 'Rookie of the Year', null, { cat: 'season' }),
+    award('goalie', 'Goaltender of the Year', null, { cat: 'season' }),
+    award('dpoy', 'Defensive Player of the Year', null, { cat: 'season' }),
+    award('transition', 'Transition Player of the Year', null, { cat: 'season' }),
+    award('points', 'Scoring leader', 'Most points', { cat: 'stats' }),
+    award('goals', 'Goals leader', 'Most goals', { cat: 'stats' }),
+    teamAward('coy', 'Coach of the Year', 'Les Bartley Award', { cat: 'staff' }),
+    teamAward('gm', 'GM of the Year', 'Front office', { cat: 'staff' }),
+    award('finalsmvp', 'Finals MVP', null, { cat: 'post' }),
+    award('sportsmanship', 'Sportsmanship Award', null, { cat: 'character' }),
+    award('teammate', 'Teammate of the Year', null, { cat: 'character' }),
+  ],
 };
 
 // ---------------------------------------------------------------------------
@@ -172,6 +201,21 @@ const nhlDivision = (div) => ({
   layout: { surface: 'rink', groups: [{ rows: [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, _, 10]] }] },
 });
 
+// Soccer: a 4-3-3 on the pitch, attack at the top. Slots: 0 GK, 1–4 defenders, 5–7 midfielders, 8–10 forwards.
+const XI_LABELS = ['GK', 'D', 'D', 'D', 'D', 'M', 'M', 'M', 'F', 'F', 'F'];
+const XI_POS = [['G', 'GK'], ['D'], ['D'], ['D'], ['D'], ['M'], ['M'], ['M'], ['F'], ['F'], ['F']];
+const XI_LAYOUT = { surface: 'pitch', groups: [{ rows: [[_, 8, _, 9, _, 10, _], [_, 5, _, 6, _, 7, _], [1, _, 2, _, 3, _, 4], [_, _, _, 0, _, _, _]] }] };
+
+const mlsAllStar = () => ({
+  id: 'allstar-mls', side: 'MLS', title: 'MLS All-Stars', points: 1,
+  sections: [
+    S('Starting XI', 11, { size: 'big', labels: XI_LABELS, posBySlot: XI_POS }),
+    S('Reserves', 15, { kind: 'reserve' }),
+    extras,
+  ],
+  layout: XI_LAYOUT,
+});
+
 const mlbAllStar = (lg) => ({
   id: `allstar-${lg.toLowerCase()}`, side: lg, title: `${lg} All-Stars`, points: 1,
   filter: { conference: lg },
@@ -193,8 +237,10 @@ export const ALLSTARS = {
   nfl: [proBowl('AFC'), proBowl('NFC')],
   nhl: ['Atlantic', 'Metropolitan', 'Central', 'Pacific'].map(nhlDivision),
   mlb: [mlbAllStar('AL'), mlbAllStar('NL')],
+  mls: [mlsAllStar()],
+  nll: [], // the NLL has no All-Star game
 };
-export const ALLSTAR_NAME = { nfl: 'Pro Bowl', nba: 'All-Stars', nhl: 'All-Stars', mlb: 'All-Stars' };
+export const ALLSTAR_NAME = { nfl: 'Pro Bowl', nba: 'All-Stars', nhl: 'All-Stars', mlb: 'All-Stars', mls: 'All-Stars', nll: 'All-Stars' };
 
 // ---------------------------------------------------------------------------
 // Year-end teams (1 point per player)
@@ -238,6 +284,14 @@ const nhlTeam = (id, title, heading, group) => ({
   layout: { surface: 'rink', groups: [{ rows: [[1, 0, 2], [3, _, 4], [_, 5, _]] }] },
 });
 
+// Box lacrosse: three forwards up top, two defenders, the goalie in net.
+const nllTeam = (tier) => ({
+  ...yearEnd(`allnll-${tier}`, `${tier === 1 ? 'First' : 'Second'} Team`, 'All-NLL', 'allnll', [
+    S('Lineup', 6, { size: 'big', labels: ['F', 'F', 'F', 'D', 'D', 'G'], posBySlot: [null, null, null, null, null, ['G']] }),
+  ]),
+  layout: { surface: 'rink', groups: [{ rows: [[0, 1, 2], [3, _, 4], [_, 5, _]] }] },
+});
+
 const allMlb = (tier) => withDiamond(yearEnd(`allmlb-${tier}`, `All-MLB ${tier === 1 ? 'First' : 'Second'} Team`, 'All-MLB', 'allmlb', [
   S('Position players', 9, {
     size: 'big', labels: ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'],
@@ -266,6 +320,8 @@ export const YEAR_END = {
     nhlTeam('allrookie', 'All-Rookie Team', 'All-Rookie', null),
   ],
   mlb: [allMlb(1), allMlb(2)],
+  mls: [{ ...yearEnd('bestxi', 'Best XI', 'MLS Best XI', null, [S('Starting XI', 11, { size: 'big', labels: XI_LABELS, posBySlot: XI_POS })]), layout: XI_LAYOUT }],
+  nll: [nllTeam(1), nllTeam(2)],
 };
 
 // ---------------------------------------------------------------------------
@@ -313,6 +369,8 @@ export function slotRule(sport, sheet, flat) {
   const fit = slotPositions(sheet, flat);
   if (sport === 'nfl') return fit?.length ? { only: fit } : null;
   if (sport === 'nhl' && fit?.length) return fit.includes('G') ? { only: ['G'] } : { not: ['G'] };
+  if (sport === 'nll' && sheet.layout) return fit?.includes('G') ? { only: ['G'] } : { not: ['G'] };
+  if (sport === 'mls' && fit?.length) return fit.includes('G') ? { only: ['G', 'GK'] } : { not: ['G', 'GK'] };
   if (sport === 'mlb' && fit?.length) return fit.some((p) => PITCHERS.includes(p)) ? { only: PITCHERS } : { not: PITCHERS };
   return null;
 }
@@ -349,6 +407,7 @@ export function realOrder(teams, sport) {
   const score = (t) => {
     const gp = t.wins + t.losses + (t.ties || 0);
     if (sport === 'nhl') return [2 * t.wins + (t.ties || 0), t.wins];
+    if (sport === 'mls') return [3 * t.wins + (t.ties || 0), t.wins]; // 3 points a win, 1 a draw
     return [gp ? (t.wins + (t.ties || 0) / 2) / gp : 0, t.wins];
   };
   return [...teams].sort((a, b) => {

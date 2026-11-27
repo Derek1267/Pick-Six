@@ -183,7 +183,7 @@ begin
     raise exception 'League name is required';
   end if;
 
-  if p_sport not in ('nfl', 'nba', 'nhl', 'mlb') then
+  if p_sport not in ('nfl', 'nba', 'nhl', 'mlb', 'mls', 'nll') then
     raise exception 'Unknown sport %', p_sport;
   end if;
 
@@ -262,6 +262,7 @@ begin
     from picks pk
     join games g on g.id = pk.game_id
     where pk.league_id = p_league and g.winner is not null
+      and (g.winner <> 'tie' or g.sport = 'mls') -- ties don't count, except soccer draws (you can pick a draw)
     group by pk.user_id, g.season_type, g.week
   )
   select m.user_id, p.display_name, gr.season_type, gr.week,
@@ -623,3 +624,10 @@ alter table public.teams add column if not exists division text;
 create index if not exists players_team on public.players (sport, team_abbr);
 
 notify pgrst, 'reload schema';
+
+
+-- ---------------------------------------------------------------------
+-- v8: MLS and NLL. Soccer picks can be a draw ('tie').
+-- ---------------------------------------------------------------------
+alter table public.picks drop constraint if exists picks_pick_check;
+alter table public.picks add constraint picks_pick_check check (pick in ('home', 'away', 'tie'));
