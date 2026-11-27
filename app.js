@@ -114,8 +114,8 @@ async function getLeagueBundle(id) {
   if (fresh(hit, LEAGUE_TTL)) return hit.data;
   const { data: league, error } = await sb.from('leagues').select('*').eq('id', id).maybeSingle();
   if (error || !league) return null;
-  const { data } = await sb.from('league_members').select('user_id, role, profiles(display_name)').eq('league_id', id);
-  const members = (data || []).map((m) => ({ user_id: m.user_id, role: m.role, name: m.profiles?.display_name || 'Player' }));
+  const { data } = await sb.from('league_members').select('user_id, role, joined_at, profiles(display_name)').eq('league_id', id);
+  const members = (data || []).map((m) => ({ user_id: m.user_id, role: m.role, joined_at: m.joined_at, name: m.profiles?.display_name || 'Player' }));
   const bundle = { league, members };
   cache.leagues.set(id, { at: Date.now(), data: bundle });
   return bundle;
@@ -1042,71 +1042,263 @@ async function makePick(league, gameId, side, btn) {
 
 // ----- Standings tab -----
 
+// The headline award per sport, for the "Called the MVP" trophy.
+const MVP_AWARD = { nba: ['mvp'], nfl: ['mvp'], nhl: ['hart'], mlb: ['almvp', 'nlmvp'], mls: ['mvp'], nll: ['mvp'] };
+
+async function allLeaguePicks(leagueId) {
+  // Everyone's picks on games that have started (the database hides the rest), 1,000 rows at a time.
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('picks').select('user_id, game_id, pick, is_lock')
+      .eq('league_id', leagueId).order('game_id').range(from, from + 999);
+    if (error || !data?.length) break;
+    out.push(...data);
+    if (data.length < 1000) break;
+  }
+  return out;
+}
+
 async function standingsHtml(league, members) {
   const sport = league.sport;
-  const { data: rows, error } = await sb.rpc('league_leaderboard', { p_league: league.id });
-  if (error) return `<p class="error">${esc(friendlyError(error))}</p>`;
+  const rules = settingsOf(league);
+  const me = state.session.user.id;
+  const mvpQs = (MVP_AWARD[sport] || []).map((id) => `${sport}:${id}`);
+  const [lb, games, allPicks, mvpAnswers, mvpPicks, seedRes, bracketRes] = await Promise.all([
+    sb.rpc('league_leaderboard', { p_league: league.id }),
+    getGames(sport, league.season).catch(() => []),
+    allLeaguePicks(league.id),
+    sb.from('award_settings').select('question_id, answers').eq('league_id', league.id).in('question_id', mvpQs),
+    sb.from('award_picks').select('user_id, question_id, players').eq('league_id', league.id).in('question_id', mvpQs),
+    sb.from('playoff_seeds').select('*').eq('sport', sport).eq('season', league.season),
+    sb.from('bracket_picks').select('user_id, picks').eq('league_id', league.id),
+  ]);
+  if (lb.error) return `<p class="error">${esc(friendlyError(lb.error))}</p>`;
+  const rows = lb.data || [];
 
-  const players = new Map(members.map((m) => [m.user_id, { ...m, correct: 0, graded: 0, weekWins: 0 }]));
+  const blank = () => ({ correct: 0, graded: 0, points: 0, locks: 0, upsets: 0, autos: 0, weekWins: 0, perfect: 0, catchUp: 0, badges: [] });
+  const players = new Map(members.map((m) => [m.user_id, { ...m, ...blank() }]));
   const byWeek = new Map();
   for (const r of rows) {
-    const p = players.get(r.user_id) || players.set(r.user_id, { user_id: r.user_id, name: r.display_name, correct: 0, graded: 0, weekWins: 0 }).get(r.user_id);
+    const p = players.get(r.user_id) || players.set(r.user_id, { user_id: r.user_id, name: r.display_name, ...blank() }).get(r.user_id);
     p.name = r.display_name;
     if (r.week == null) continue;
-    p.correct += r.correct;
-    p.graded += r.graded;
+    Object.assign(p, { correct: p.correct + r.correct, graded: p.graded + r.graded, points: p.points + r.points,
+      locks: p.locks + r.locks_hit, upsets: p.upsets + r.upsets, autos: p.autos + r.autos });
     const k = weekKey(r.season_type, r.week);
-    if (!byWeek.has(k)) byWeek.set(k, { type: r.season_type, week: r.week, rows: [] });
+    if (!byWeek.has(k)) byWeek.set(k, { key: k, type: r.season_type, week: r.week, rows: [] });
     byWeek.get(k).rows.push(r);
+    if (r.graded >= 3 && r.correct === r.graded) p.perfect += 1;
   }
 
-  // Weekly winners (ties share the win)
+  // Late joiners (if the owner allows it): weeks played before they joined count as that week's lowest score.
+  const weekEnd = new Map();
+  for (const g of games) {
+    const k = weekKey(g.season_type, g.week);
+    weekEnd.set(k, Math.max(weekEnd.get(k) || 0, new Date(g.start_time).getTime()));
+  }
+  if (rules.lateCatchUp) {
+    for (const w of byWeek.values()) {
+      const played = w.rows.filter((r) => r.graded > 0);
+      if (!played.length) continue;
+      const low = Math.min(...played.map((r) => r.points));
+      for (const p of players.values()) {
+        const joined = new Date(p.joined_at || 0).getTime();
+        if (joined > (weekEnd.get(w.key) || 0) && !w.rows.some((r) => r.user_id === p.user_id && r.graded > 0)) {
+          p.points += low; p.catchUp += low;
+          w.rows.push({ user_id: p.user_id, display_name: p.name, points: low, correct: 0, graded: 0, catchUp: true });
+        }
+      }
+    }
+  }
+
+  // Weekly winners by points (ties share the win).
   const weekly = [...byWeek.values()].sort((a, b) => b.type - a.type || b.week - a.week).map((w) => {
-    const best = Math.max(...w.rows.map((r) => r.correct));
-    const winners = w.rows.filter((r) => r.correct === best && best > 0);
+    const real = w.rows.filter((r) => !r.catchUp);
+    const best = Math.max(0, ...real.map((r) => r.points));
+    const winners = real.filter((r) => r.points === best && best > 0);
     winners.forEach((r) => { players.get(r.user_id).weekWins += 1; });
     return { ...w, best, winners };
   });
 
-  const table = [...players.values()].sort((a, b) => b.correct - a.correct
-    || (b.graded ? b.correct / b.graded : 0) - (a.graded ? a.correct / a.graded : 0)
-    || a.name.localeCompare(b.name));
+  // ----- trophies -----
+  const award = (userIds, icon, label, title) => userIds.forEach((id) => players.get(id)?.badges.push({ icon, label, title }));
+  for (const p of players.values()) {
+    if (p.perfect) p.badges.push({ icon: 'check', label: p.perfect > 1 ? `Perfect ×${p.perfect}` : 'Perfect week', title: 'Got every pick right in a week' });
+    if (p.weekWins) p.badges.push({ icon: 'trophy', label: p.weekWins > 1 ? `Week wins ×${p.weekWins}` : 'Week winner', title: 'Won a week' });
+  }
+  const leaders = (field) => {
+    const top = Math.max(0, ...[...players.values()].map((p) => p[field]));
+    return top > 0 ? [...players.values()].filter((p) => p[field] === top).map((p) => p.user_id) : [];
+  };
+  if (rules.upsetBonus) award(leaders('upsets'), 'flame', 'Upset king', 'Most correct underdog picks');
+  if (rules.lockOfWeek) award(leaders('locks'), 'lock', 'Lock master', 'Most locks that came through');
+  const answers = new Map((mvpAnswers.data || []).map((r) => [r.question_id, new Set((r.answers || []).filter(Boolean))]));
+  const calledMvp = (mvpPicks.data || []).filter((r) => answers.get(r.question_id)?.has(r.players?.[0])).map((r) => r.user_id);
+  award([...new Set(calledMvp)], 'star', 'Called the MVP', 'Picked the MVP before the season was decided');
+  const seeds = BR.seedsByConference(seedRes.data || [], sport);
+  if (BR.isComplete(seeds, sport)) {
+    const results = BR.actualResults(sport, seeds, games);
+    if (results.F) {
+      const scored = (bracketRes.data || []).map((b) => ({ id: b.user_id, pts: BR.scoreBracket(sport, seeds, b.picks, results).points }));
+      const top = Math.max(0, ...scored.map((s) => s.pts));
+      award(scored.filter((s) => s.pts === top && top > 0).map((s) => s.id), 'bracket', 'Best bracket', 'Highest-scoring playoff bracket');
+    }
+  }
 
+  // ----- table -----
+  const table = [...players.values()].sort((a, b) => b.points - a.points || b.correct - a.correct
+    || (b.graded ? b.correct / b.graded : 0) - (a.graded ? a.correct / a.graded : 0) || a.name.localeCompare(b.name));
+  const showPts = rules.lockOfWeek || rules.upsetBonus || rules.lateCatchUp;
   let rank = 0; let last = null;
-  const me = state.session.user.id;
+  const chip = (b) => `<span class="badge-chip" title="${esc(b.title)}">${ICON[b.icon]}${esc(b.label)}</span>`;
   const rowsHtml = table.map((p, i) => {
-    if (p.correct !== last) { rank = i + 1; last = p.correct; }
+    if (p.points !== last) { rank = i + 1; last = p.points; }
     const pct = p.graded ? (p.correct / p.graded).toFixed(3).replace(/^0/, '') : '—';
     return `
       <tr class="${p.user_id === me ? 'me' : ''}">
-        <td class="rank">${rank === 1 && p.correct > 0 ? '🏆' : rank}</td>
-        <td class="player">${esc(p.name)}</td>
-        <td class="num strong">${p.correct}</td>
+        <td class="rank">${rank === 1 && p.points > 0 ? ICON.trophy : rank}</td>
+        <td class="player">${esc(p.name)}${p.catchUp ? ` <span class="muted small" title="Weeks before joining count as that week's lowest score">+${p.catchUp} catch-up</span>` : ''}</td>
+        ${showPts ? `<td class="num strong">${p.points}</td>` : ''}
+        <td class="num ${showPts ? '' : 'strong'}">${p.correct}</td>
         <td class="num">${p.graded - p.correct}</td>
         <td class="num">${pct}</td>
         <td class="num">${p.weekWins || '—'}</td>
       </tr>`;
   }).join('');
+  const scoringNote = [rules.lockOfWeek && 'locks count double', rules.upsetBonus && '+1 for a correct underdog pick',
+    rules.autoPick && 'missed picks go to the better-record team', rules.deadline === 'week' && `picks lock at the first game of each ${sportInfo(sport).unit}`]
+    .filter(Boolean);
 
   const weeklyHtml = weekly.length ? weekly.map((w) => `
     <li><span class="wk">${weekLabel(w.type, w.week, sport)}</span>
       <span>${w.winners.length ? w.winners.map((r) => esc(r.display_name)).join(', ') : '<span class="muted">—</span>'}</span>
-      <span class="muted small">${w.best} correct</span></li>`).join('')
+      <span class="muted small">${w.best} pt${w.best === 1 ? '' : 's'}</span></li>`).join('')
     : '<li class="muted">Weekly winners show up once games go final.</li>';
+
+  // ----- head to head: games where you and a friend picked different sides -----
+  const gameById = new Map(games.map((g) => [g.id, g]));
+  const pickOf = new Map(allPicks.map((p) => [`${p.user_id}|${p.game_id}`, p.pick]));
+  const myFinal = allPicks.filter((p) => p.user_id === me && gameById.get(p.game_id)?.winner);
+  const h2h = members.filter((m) => m.user_id !== me).map((m) => {
+    let mine = 0; let theirs = 0;
+    for (const p of myFinal) {
+      const other = pickOf.get(`${m.user_id}|${p.game_id}`);
+      if (!other || other === p.pick) continue;
+      const w = gameById.get(p.game_id).winner;
+      if (p.pick === w) mine++; else if (other === w) theirs++;
+    }
+    return { m, mine, theirs };
+  }).sort((a, b) => (b.mine - b.theirs) - (a.mine - a.theirs) || a.m.name.localeCompare(b.m.name));
+  const h2hHtml = h2h.length ? `
+    <section class="card">
+      <h2 class="icon-head">${ICON.users}Head to head</h2>
+      <p class="muted small">Games where you and a friend picked different teams. Who got it right?</p>
+      <table class="h2h"><thead><tr><th>Friend</th><th class="num">You</th><th class="num">Them</th><th></th></tr></thead>
+      <tbody>${h2h.map(({ m, mine, theirs }) => `<tr><td>${esc(m.name)}</td><td class="num strong">${mine}</td><td class="num">${theirs}</td>
+        <td><span class="h2h-tag ${mine > theirs ? 'up' : mine < theirs ? 'down' : ''}">${mine > theirs ? 'You lead' : mine < theirs ? 'They lead' : mine ? 'Even' : '—'}</span></td></tr>`).join('')}</tbody></table>
+    </section>` : '';
+
+  // ----- trophy case -----
+  const withBadges = table.filter((p) => p.badges.length);
+  const trophyHtml = `
+    <section class="card">
+      <h2 class="icon-head">${ICON.medal}Trophy case</h2>
+      ${withBadges.length ? `<ul class="trophy-case">${withBadges.map((p) => `<li><span class="who">${esc(p.name)}</span><span class="chips">${p.badges.map(chip).join('')}</span></li>`).join('')}</ul>`
+        : '<p class="muted small">Perfect weeks, week wins, Best bracket, Called the MVP and more show up here as the season goes.</p>'}
+    </section>`;
+
+  // ----- weekly recap (shareable picture) -----
+  state.recap = weeklyRecap(league, weekly, games, allPicks, members);
 
   return `
     <div class="board-grid">
-    <div class="card flush">
-      <table class="standings">
-        <thead><tr><th>#</th><th>Player</th><th class="num">W</th><th class="num">L</th><th class="num">Pct</th><th class="num" title="Weeks won">Wk wins</th></tr></thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-    </div>
-    <section class="card">
-      <h2 class="icon-head">${ICON.trophy}Weekly winners</h2>
-      <ul class="weekly">${weeklyHtml}</ul>
-    </section>
+      <div class="board-main">
+        <div class="card flush">
+          <table class="standings">
+            <thead><tr><th>#</th><th>Player</th>${showPts ? '<th class="num">Pts</th>' : ''}<th class="num">W</th><th class="num">L</th><th class="num">Pct</th><th class="num" title="Weeks won">Wk wins</th></tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>
+        ${scoringNote.length ? `<p class="muted small scoring-note">This league: ${scoringNote.join(' · ')}.</p>` : ''}
+        ${state.recap ? `<section class="card recap-card">
+          <div><h2 class="icon-head">${ICON.share}${esc(state.recap.label)} recap</h2>
+          <p class="muted small">Winner, best upset call and worst miss, as a picture for the group chat.</p></div>
+          <button class="btn" id="recap-btn">${ICON.share}Share recap</button></section>` : ''}
+        ${h2hHtml}
+      </div>
+      <div class="board-side">
+        ${trophyHtml}
+        <section class="card">
+          <h2 class="icon-head">${ICON.trophy}Weekly winners</h2>
+          <ul class="weekly">${weeklyHtml}</ul>
+        </section>
+      </div>
     </div>`;
+}
+
+// The most recent finished week: who won, the best upset call, the worst miss.
+function weeklyRecap(league, weekly, games, allPicks, members) {
+  const done = weekly.find((w) => w.winners.length);
+  if (!done) return null;
+  const weekGames = games.filter((g) => weekKey(g.season_type, g.week) === done.key && g.winner);
+  const byGame = new Map();
+  for (const p of allPicks) { if (!byGame.has(p.game_id)) byGame.set(p.game_id, []); byGame.get(p.game_id).push(p); }
+  const team = (g, side) => (side === 'home' ? g.home_abbr : g.away_abbr);
+  let upset = null; let miss = null;
+  for (const g of weekGames) {
+    const ps = byGame.get(g.id) || [];
+    if (!ps.length) continue;
+    const right = ps.filter((p) => p.pick === g.winner);
+    if (right.length && (!upset || right.length / ps.length < upset.share)) {
+      upset = { share: right.length / ps.length, who: right.map((p) => nameOf(members, p.user_id)), team: g.winner === 'tie' ? 'a draw' : team(g, g.winner), of: ps.length, n: right.length };
+    }
+    const wrong = ps.filter((p) => p.pick !== g.winner);
+    const lost = g.winner === 'home' ? 'away' : 'home';
+    if (wrong.length && (!miss || wrong.length > miss.n)) miss = { n: wrong.length, of: ps.length, team: team(g, lost), winner: g.winner === 'tie' ? 'a draw' : team(g, g.winner) };
+  }
+  return {
+    label: weekLabel(done.type, done.week, league.sport), league: league.name, sport: sportInfo(league.sport).name,
+    winners: done.winners.map((r) => r.display_name), best: done.best, upset, miss,
+  };
+}
+
+// Draw the recap as a 1080×1350 picture and share it (or download it where sharing files isn't supported).
+async function shareRecap() {
+  const r = state.recap;
+  if (!r) return;
+  await document.fonts?.ready;
+  const c = Object.assign(document.createElement('canvas'), { width: 1080, height: 1350 });
+  const x = c.getContext('2d');
+  x.fillStyle = '#160b2e'; x.fillRect(0, 0, 1080, 1350);
+  x.fillStyle = '#6d3fe0'; x.fillRect(0, 0, 1080, 14);
+  const text = (t, px, y, { font = 'Figtree', weight = 700, color = '#ffffff', size = 40, align = 'center' } = {}) => {
+    x.font = `${weight} ${size}px "${font}", sans-serif`; x.fillStyle = color; x.textAlign = align;
+    let s = String(t);
+    while (x.measureText(s).width > 960 && s.length > 4) s = `${s.slice(0, -2)}…`;
+    x.fillText(s, px, y);
+  };
+  text('PICK SIX', 540, 110, { font: 'Big Shoulders Display', weight: 900, size: 64, color: '#f5b400' });
+  text(`${r.league} · ${r.sport}`, 540, 170, { size: 34, color: 'rgba(255,255,255,.7)', weight: 600 });
+  text(`${r.label} recap`, 540, 260, { font: 'Big Shoulders Display', weight: 800, size: 92 });
+  const block = (y, title, big, small) => {
+    x.fillStyle = 'rgba(255,255,255,.07)'; x.beginPath(); x.roundRect(80, y, 920, 260, 28); x.fill();
+    text(title, 540, y + 64, { size: 32, color: '#f5b400', weight: 700 });
+    text(big, 540, y + 150, { font: 'Big Shoulders Display', weight: 800, size: 76 });
+    text(small, 540, y + 214, { size: 32, color: 'rgba(255,255,255,.75)', weight: 600 });
+  };
+  block(320, 'Week winner', r.winners.join(' & '), `${r.best} point${r.best === 1 ? '' : 's'}`);
+  block(610, 'Best upset call', r.upset ? r.upset.who.slice(0, 3).join(', ') : 'Nobody', r.upset ? `${r.upset.n} of ${r.upset.of} picked ${r.upset.team}` : 'No upsets called');
+  block(900, 'Worst miss', r.miss ? `${r.miss.n} of ${r.miss.of} took ${r.miss.team}` : 'Nobody missed', r.miss ? `and ${r.miss.winner} won` : '');
+  text('Pick winners with your friends: derek1267.github.io/Pick-Six', 540, 1260, { size: 28, color: 'rgba(255,255,255,.55)', weight: 600 });
+  const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+  const file = new File([blob], 'pick-six-recap.png', { type: 'image/png' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: `${r.label} recap` }); return; } catch { /* fall back to download */ }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: 'pick-six-recap.png' });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ----- Manage league dialog -----
@@ -2421,6 +2613,7 @@ app.addEventListener('click', (e) => {
   const lock = e.target.closest('[data-lock-game]');
   if (lock && state.league) setLock(state.league, lock.dataset.lockGame);
   if (e.target.closest('#ics-btn') && state.league) downloadIcs(state.league, state.icsGames || []);
+  if (e.target.closest('#recap-btn')) shareRecap();
 });
 
 // ---------------------------------------------------------------------------
