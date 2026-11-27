@@ -27,7 +27,12 @@
   - MLB: 6 per league, with byes for the top two.
   League brackets lock when the playoffs start and score 1 / 2 / 4 / 8 points by round.
 - **🎲 Simulator and title odds.** Play out the bracket in one tap, or see each team's chances from thousands of simulated playoffs.
-- **Just-for-fun mode.** Build any bracket you like, even with your own choice of teams, without it counting.
+- **Build your own bracket.** Choose which teams make the playoffs and their seeds (the NBA version includes the play-in tournament), then fill it out or simulate it.
+- **Predictions.**
+  - *Final standings*: rank every team, scored live against the real table.
+  - *Awards*: MVPs, rookies, coaches and executives, playoff MVPs and more.
+  - *All-Stars*: full rosters per conference with starters, reserves and injury replacements.
+  - *Year-end teams*: All-NBA, All-Defensive, All-Rookie, All-Pro, All-MLB and more.
 - **Easy sign-in.** Continue with Google, or use an email link. No passwords.
 - **Light and dark mode.** Follows your device, or flip it with the ☀/☾ button.
 
@@ -44,7 +49,8 @@ A small, free-to-run stack with no build step:
 ```
 ├── index.html            page shell
 ├── app.js                sign-in, leagues, picks, standings, brackets
-├── bracket.js            playoff formats, simulator, odds and scoring (no DOM, testable in Node)
+├── bracket.js            playoff formats (incl. NBA play-in), simulator, odds and scoring
+├── selections.js         award lists, All-Star and year-end rosters, standings scoring
 ├── styles.css            look and feel
 ├── logo.svg              the Bracket Six logo
 ├── config.js             your Supabase project URL and public key

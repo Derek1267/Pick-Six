@@ -24,6 +24,9 @@ export const FORMATS = {
     r1: [[1, 8], [4, 5], [3, 6], [2, 7]],
     r2: [[0, 1], [2, 3]], // winners of R1 games 0 & 1, 2 & 3
     byes: [],
+    // With 10 teams per conference, seeds 7–10 play the play-in first:
+    // 7 v 8 (winner is the 7 seed), 9 v 10, then the 7/8 loser v the 9/10 winner (winner is the 8 seed).
+    playIn: true,
   },
   nhl: {
     conferences: ['East', 'West'],
@@ -46,8 +49,8 @@ export const FORMATS = {
   },
 };
 
-export const ROUND_KEYS = ['R1', 'R2', 'R3', 'F'];
-export const ROUND_POINTS = { R1: 1, R2: 2, R3: 4, F: 8 };
+export const ROUND_KEYS = ['PI', 'R1', 'R2', 'R3', 'F'];
+export const ROUND_POINTS = { PI: 0, R1: 1, R2: 2, R3: 4, F: 8 };
 export const roundOf = (slot) => (slot === 'F' ? 'F' : slot.split('-')[1]);
 export const formatOf = (sport) => FORMATS[sport] || FORMATS.nfl;
 
@@ -70,9 +73,13 @@ export function seedsByConference(rows, sport) {
   return out;
 }
 
+export const hasPlayIn = (seeds, sport) => {
+  const f = formatOf(sport);
+  return !!f.playIn && f.conferences.every((c) => seeds[c]?.length === f.teams + 2);
+};
 export const isComplete = (seeds, sport) => {
   const f = formatOf(sport);
-  return f.conferences.every((c) => seeds[c]?.length === f.teams);
+  return f.conferences.every((c) => seeds[c]?.length === f.teams) || hasPlayIn(seeds, sport);
 };
 
 // ---------------------------------------------------------------------------
@@ -94,8 +101,22 @@ export function buildBracket(sport, seeds, picks = {}) {
   const out = { F: null };
   for (const conf of f.conferences) {
     const s = seeds[conf] || [];
-    const bySeed = (n) => s.find((t) => t.seed === n) || null;
+    const seedTeam = (n) => s.find((t) => t.seed === n) || null;
     const id = (r, i) => `${conf}-${r}-${i}`;
+
+    // Play-in (NBA, when the field has seeds 9 and 10)
+    let playIn = null;
+    let bySeed = seedTeam;
+    if (f.playIn && seedTeam(9) && seedTeam(10)) {
+      const pi0 = game(id('PI', 0), seedTeam(7), seedTeam(8), picks, 1);
+      const pi1 = game(id('PI', 1), seedTeam(9), seedTeam(10), picks, 1);
+      const loser0 = pi0.winner ? (pi0.winner === pi0.home ? pi0.away : pi0.home) : null;
+      const pi2 = game(id('PI', 2), loser0, pi1.winner, picks, 1);
+      playIn = [pi0, pi1, pi2];
+      const seven = pi0.winner ? { ...pi0.winner, seed: 7 } : null;
+      const eight = pi2.winner ? { ...pi2.winner, seed: 8 } : null;
+      bySeed = (n) => (n === 7 ? seven : n === 8 ? eight : seedTeam(n));
+    }
 
     const r1 = f.r1.map(([h, a], i) => game(id('R1', i), bySeed(h), bySeed(a), picks, f.bestOf[0]));
     const w1 = r1.map((g) => g.winner);
@@ -117,7 +138,7 @@ export function buildBracket(sport, seeds, picks = {}) {
 
     const [a, b] = r2.map((g) => g.winner);
     const r3 = game(id('R3', 0), a || null, b || null, picks, f.bestOf[2]);
-    out[conf] = { byes: f.byes.map(bySeed).filter(Boolean), r1, r2, r3 };
+    out[conf] = { byes: f.byes.map(bySeed).filter(Boolean), playIn, r1, r2, r3 };
   }
   const [c0, c1] = f.conferences;
   out.F = game('F', out[c0].r3.winner, out[c1].r3.winner, picks, f.bestOf[3], true);
@@ -125,7 +146,7 @@ export function buildBracket(sport, seeds, picks = {}) {
 }
 
 export const allGames = (sport, b) => [
-  ...formatOf(sport).conferences.flatMap((c) => [...b[c].r1, ...b[c].r2, b[c].r3]),
+  ...formatOf(sport).conferences.flatMap((c) => [...(b[c].playIn || []), ...b[c].r1, ...b[c].r2, b[c].r3]),
   b.F,
 ];
 
@@ -143,7 +164,8 @@ export function cleanPicks(sport, seeds, picks) {
   return current;
 }
 
-export const totalGames = (sport) => formatOf(sport).r1.length * 2 + 4 + 2 + 1;
+export const totalGames = (sport, seeds = null) =>
+  formatOf(sport).r1.length * 2 + 4 + 2 + 1 + (seeds && hasPlayIn(seeds, sport) ? 6 : 0);
 export const pickCount = (sport, seeds, picks) =>
   allGames(sport, buildBracket(sport, seeds, picks)).filter((g) => g.winner).length;
 
@@ -260,7 +282,7 @@ export function actualResults(sport, seeds, games) {
 // Points for each correct winner per round (round-based, because the NFL re-seeds).
 // Returns { points, correct, possible }: possible = points + picks still alive.
 export function scoreBracket(sport, seeds, picks, results) {
-  const real = { R1: new Set(), R2: new Set(), R3: new Set(), F: new Set() };
+  const real = { PI: new Set(), R1: new Set(), R2: new Set(), R3: new Set(), F: new Set() };
   for (const [slot, abbr] of Object.entries(results || {})) real[roundOf(slot)].add(abbr);
 
   const eliminated = new Set();

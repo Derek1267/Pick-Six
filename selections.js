@@ -1,140 +1,262 @@
-// Pick Six — what players can be picked for: single awards (Awards tab) and
-// whole teams with every slot (All-Stars tab). Data only, no DOM.
+// Pick Six — what can be predicted: awards, All-Star rosters, year-end teams.
+// Data only, no DOM.
 //
-// A sheet has sections of slots. `pos` lists position codes that fit a slot (used to sort
-// search results; any player can still be chosen). `filter` limits players to a conference
-// or division. Sheets in the same `group` (e.g. All-NBA 1st/2nd/3rd) can't share a player.
+// A sheet has sections of slots:
+//   { label, n, pos?, size?: 'big' | 'small', labels?: [per-slot label], kind?: 'reserve' | 'alt' }
+// `pos` lists position codes that fit (search shows them first; anyone can still be chosen).
+// `filter` limits players to a conference or division. Sheets in the same `group`
+// (e.g. All-NBA 1st/2nd/3rd) can't share a player. `pick: 'team'` means you choose a team
+// (coach / executive awards) instead of a player.
 
-const S = (label, n, pos) => ({ label, n, pos });
-const F = ['C', 'LW', 'RW', 'F', 'W'];
-const NBA_GUARDS = ['PG', 'SG', 'G'];
-const NBA_FRONT = ['SF', 'PF', 'F', 'C', 'FC', 'GF'];
+const S = (label, n, more = {}) => ({ label, n, ...more });
+const NBA_G = ['PG', 'SG', 'G'];
+const NBA_F = ['SF', 'PF', 'F', 'C', 'FC', 'GF'];
+const NHL_F = ['C', 'LW', 'RW', 'F', 'W'];
 
-// ----- Awards: one winner each, 3 points -----
-const award = (id, title, note) => ({ id, title, note, sections: [S('Pick', 1)], points: 3 });
+// ---------------------------------------------------------------------------
+// Awards (3 points each)
+// ---------------------------------------------------------------------------
+
+const award = (id, title, note, more = {}) => ({ id, title, note, sections: [S('Pick', 1)], points: 3, ...more });
+const teamAward = (id, title, note, more = {}) => award(id, title, note, { pick: 'team', ...more });
+
+export const AWARD_CATEGORIES = {
+  season: 'Season awards',
+  stats: 'Stat titles',
+  staff: 'Coaches & front office',
+  post: 'Playoffs',
+  character: 'Character & community',
+  events: 'Events',
+};
 
 export const AWARDS = {
-  nfl: [
-    award('mvp', 'MVP', 'Most Valuable Player'),
-    award('opoy', 'Offensive Player of the Year'),
-    award('dpoy', 'Defensive Player of the Year'),
-    award('oroy', 'Offensive Rookie of the Year'),
-    award('droy', 'Defensive Rookie of the Year'),
-    award('cpoy', 'Comeback Player of the Year'),
-    award('sbmvp', 'Super Bowl MVP'),
-  ],
   nba: [
-    award('mvp', 'MVP', 'Most Valuable Player'),
-    award('roy', 'Rookie of the Year'),
-    award('dpoy', 'Defensive Player of the Year'),
-    award('smoy', 'Sixth Man of the Year'),
-    award('mip', 'Most Improved Player'),
-    award('clutch', 'Clutch Player of the Year'),
-    award('fmvp', 'Finals MVP'),
+    award('mvp', 'Most Valuable Player', 'Michael Jordan Trophy', { cat: 'season' }),
+    award('dpoy', 'Defensive Player of the Year', 'Hakeem Olajuwon Trophy', { cat: 'season' }),
+    award('roy', 'Rookie of the Year', 'Wilt Chamberlain Trophy', { cat: 'season' }),
+    award('smoy', 'Sixth Man of the Year', 'John Havlicek Trophy', { cat: 'season' }),
+    award('mip', 'Most Improved Player', 'George Mikan Trophy', { cat: 'season' }),
+    award('clutch', 'Clutch Player of the Year', 'Jerry West Trophy', { cat: 'season' }),
+    teamAward('coy', 'Coach of the Year', 'Red Auerbach Trophy · pick the team', { cat: 'staff' }),
+    teamAward('eoy', 'Executive of the Year', 'Pick the team', { cat: 'staff' }),
+    award('fmvp', 'Finals MVP', 'Bill Russell Trophy', { cat: 'post' }),
+    award('ecfmvp', 'East Finals MVP', 'Larry Bird Trophy', { cat: 'post', filter: { conference: 'East' } }),
+    award('wcfmvp', 'West Finals MVP', 'Magic Johnson Trophy', { cat: 'post', filter: { conference: 'West' } }),
+    award('asgmvp', 'All-Star Game MVP', 'Kobe Bryant Trophy', { cat: 'events' }),
+    award('cupmvp', 'NBA Cup MVP', null, { cat: 'events' }),
+    award('hustle', 'Hustle Award', null, { cat: 'character' }),
+    award('sportsmanship', 'Sportsmanship Award', 'Joe Dumars Trophy', { cat: 'character' }),
+    award('teammate', 'Teammate of the Year', 'Twyman–Stokes Trophy', { cat: 'character' }),
+    award('socialjustice', 'Social Justice Champion', 'Kareem Abdul-Jabbar Trophy', { cat: 'character' }),
+  ],
+  nfl: [
+    award('mvp', 'Most Valuable Player', null, { cat: 'season' }),
+    award('opoy', 'Offensive Player of the Year', null, { cat: 'season' }),
+    award('dpoy', 'Defensive Player of the Year', null, { cat: 'season' }),
+    award('oroy', 'Offensive Rookie of the Year', null, { cat: 'season' }),
+    award('droy', 'Defensive Rookie of the Year', null, { cat: 'season' }),
+    award('cpoy', 'Comeback Player of the Year', null, { cat: 'season' }),
+    teamAward('coy', 'Coach of the Year', 'Pick the team', { cat: 'staff' }),
+    teamAward('aoy', 'Assistant Coach of the Year', 'Pick the team', { cat: 'staff' }),
+    award('sbmvp', 'Super Bowl MVP', 'Pete Rozelle Trophy', { cat: 'post' }),
+    award('wpmoy', 'Walter Payton Man of the Year', null, { cat: 'character' }),
   ],
   nhl: [
-    award('hart', 'Hart Trophy', 'MVP'),
-    award('vezina', 'Vezina Trophy', 'Best goalie'),
-    award('norris', 'Norris Trophy', 'Best defenceman'),
-    award('calder', 'Calder Trophy', 'Rookie of the year'),
-    award('rocket', 'Rocket Richard Trophy', 'Most goals'),
-    award('connsmythe', 'Conn Smythe Trophy', 'Playoff MVP'),
+    award('hart', 'Hart Trophy', 'Most valuable player', { cat: 'season' }),
+    award('lindsay', 'Ted Lindsay Award', 'Best player, voted by players', { cat: 'season' }),
+    award('vezina', 'Vezina Trophy', 'Best goaltender', { cat: 'season' }),
+    award('norris', 'Norris Trophy', 'Best defenceman', { cat: 'season' }),
+    award('calder', 'Calder Trophy', 'Rookie of the year', { cat: 'season' }),
+    award('selke', 'Selke Trophy', 'Best defensive forward', { cat: 'season' }),
+    award('artross', 'Art Ross Trophy', 'Most points', { cat: 'stats' }),
+    award('rocket', 'Rocket Richard Trophy', 'Most goals', { cat: 'stats' }),
+    award('jennings', 'William M. Jennings Trophy', 'Fewest goals against', { cat: 'stats' }),
+    teamAward('adams', 'Jack Adams Award', 'Coach of the year · pick the team', { cat: 'staff' }),
+    teamAward('gm', 'General Manager of the Year', 'Pick the team', { cat: 'staff' }),
+    award('connsmythe', 'Conn Smythe Trophy', 'Playoff MVP', { cat: 'post' }),
+    award('byng', 'Lady Byng Trophy', 'Sportsmanship', { cat: 'character' }),
+    award('masterton', 'Masterton Trophy', 'Perseverance and dedication', { cat: 'character' }),
+    award('clancy', 'King Clancy Trophy', 'Leadership and community', { cat: 'character' }),
   ],
   mlb: [
-    award('almvp', 'AL MVP'), award('nlmvp', 'NL MVP'),
-    award('alcy', 'AL Cy Young'), award('nlcy', 'NL Cy Young'),
-    award('alroy', 'AL Rookie of the Year'), award('nlroy', 'NL Rookie of the Year'),
-    award('wsmvp', 'World Series MVP'),
+    award('almvp', 'AL MVP', null, { cat: 'season', filter: { conference: 'AL' } }),
+    award('nlmvp', 'NL MVP', null, { cat: 'season', filter: { conference: 'NL' } }),
+    award('alcy', 'AL Cy Young', null, { cat: 'season', filter: { conference: 'AL' } }),
+    award('nlcy', 'NL Cy Young', null, { cat: 'season', filter: { conference: 'NL' } }),
+    award('alroy', 'AL Rookie of the Year', null, { cat: 'season', filter: { conference: 'AL' } }),
+    award('nlroy', 'NL Rookie of the Year', null, { cat: 'season', filter: { conference: 'NL' } }),
+    award('alrel', 'AL Reliever of the Year', 'Mariano Rivera Award', { cat: 'season', filter: { conference: 'AL' } }),
+    award('nlrel', 'NL Reliever of the Year', 'Trevor Hoffman Award', { cat: 'season', filter: { conference: 'NL' } }),
+    award('alcomeback', 'AL Comeback Player', null, { cat: 'season', filter: { conference: 'AL' } }),
+    award('nlcomeback', 'NL Comeback Player', null, { cat: 'season', filter: { conference: 'NL' } }),
+    award('alaaron', 'AL Hank Aaron Award', 'Best hitter', { cat: 'stats', filter: { conference: 'AL' } }),
+    award('nlaaron', 'NL Hank Aaron Award', 'Best hitter', { cat: 'stats', filter: { conference: 'NL' } }),
+    teamAward('almoy', 'AL Manager of the Year', 'Pick the team', { cat: 'staff', filter: { conference: 'AL' } }),
+    teamAward('nlmoy', 'NL Manager of the Year', 'Pick the team', { cat: 'staff', filter: { conference: 'NL' } }),
+    award('alcsmvp', 'ALCS MVP', null, { cat: 'post', filter: { conference: 'AL' } }),
+    award('nlcsmvp', 'NLCS MVP', null, { cat: 'post', filter: { conference: 'NL' } }),
+    award('wsmvp', 'World Series MVP', 'Willie Mays Award', { cat: 'post' }),
+    award('asgmvp', 'All-Star Game MVP', 'Ted Williams Award', { cat: 'events' }),
+    award('clemente', 'Roberto Clemente Award', null, { cat: 'character' }),
   ],
 };
 
-// ----- Teams: every slot, 1 point per player who really makes that team -----
-const team = (id, title, sections, extra = {}) => ({ id, title, sections, points: 1, ...extra });
+// ---------------------------------------------------------------------------
+// All-Star rosters (1 point per player who makes it, injury replacements included)
+// One sheet per side; the tab shows a toggle between sides.
+// ---------------------------------------------------------------------------
 
-const nbaAllStar = (conf) => team(`allstar-${conf.toLowerCase()}`, `${conf} All-Stars`, [
-  S('Starters · Backcourt', 2, NBA_GUARDS),
-  S('Starters · Frontcourt', 3, NBA_FRONT),
-  S('Reserves', 7),
-], { heading: 'All-Star Game', filter: { conference: conf } });
-const five = (id, title, heading, group) => team(id, title, [S('Players', 5)], { heading, group });
+const extras = S('Injury replacements & honourable mentions', 3, { kind: 'alt' });
 
-const proBowl = (conf) => team(`probowl-${conf.toLowerCase()}`, `${conf} Pro Bowl`, [
-  S('Quarterbacks', 3, ['QB']), S('Running backs', 3, ['RB']), S('Fullback', 1, ['FB', 'RB']),
-  S('Wide receivers', 4, ['WR']), S('Tight ends', 2, ['TE']),
-  S('Tackles', 3, ['OT', 'T']), S('Guards', 3, ['G', 'OG']), S('Centers', 2, ['C']),
-  S('Defensive ends', 3, ['DE', 'EDGE']), S('Interior linemen', 3, ['DT', 'NT']),
-  S('Outside linebackers', 3, ['OLB', 'LB']), S('Inside linebackers', 2, ['ILB', 'LB', 'MLB']),
-  S('Cornerbacks', 4, ['CB']), S('Safeties', 3, ['S', 'FS', 'SS']),
-  S('Kicker', 1, ['PK', 'K']), S('Punter', 1, ['P']), S('Long snapper', 1, ['LS']),
-  S('Return specialist', 1, ['WR', 'RB', 'CB']), S('Special teamer', 1),
-], { heading: 'Pro Bowl', filter: { conference: conf } });
-const allPro = (tier) => team(`allpro-${tier}`, `All-Pro ${tier === 1 ? 'First' : 'Second'} Team`, [
-  S('Quarterback', 1, ['QB']), S('Running back', 1, ['RB']), S('Fullback', 1, ['FB', 'RB']),
-  S('Wide receivers', 3, ['WR']), S('Tight end', 1, ['TE']),
-  S('Tackles', 2, ['OT', 'T']), S('Guards', 2, ['G', 'OG']), S('Center', 1, ['C']),
-  S('Edge rushers', 2, ['DE', 'EDGE', 'OLB']), S('Interior linemen', 2, ['DT', 'NT']),
-  S('Linebackers', 2, ['LB', 'ILB', 'OLB', 'MLB']), S('Cornerbacks', 2, ['CB']), S('Safeties', 2, ['S', 'FS', 'SS']),
-  S('Kicker', 1, ['PK', 'K']), S('Punter', 1, ['P']), S('Returner', 1, ['WR', 'RB', 'CB']),
-], { heading: 'All-Pro', group: 'allpro' });
+const nbaAllStar = (conf) => ({
+  id: `allstar-${conf.toLowerCase()}`, side: conf, title: `${conf} All-Stars`, points: 1,
+  filter: { conference: conf },
+  sections: [
+    S('Starters', 5, { size: 'big', labels: ['Guard', 'Guard', 'Forward', 'Forward', 'Forward'], posBySlot: [NBA_G, NBA_G, NBA_F, NBA_F, NBA_F] }),
+    S('Reserves', 7, { kind: 'reserve' }),
+    extras,
+  ],
+});
 
-const nhlDivision = (div) => team(`allstar-${div.toLowerCase()}`, `${div} All-Stars`, [
-  S('Forwards', 6, F), S('Defence', 3, ['D']), S('Goalies', 2, ['G']),
-], { heading: 'All-Star Game', filter: { division: div } });
-const nhlTeam = (id, title, heading, group) => team(id, title, [
-  S('Centre', 1, ['C']), S('Left wing', 1, ['LW', 'W']), S('Right wing', 1, ['RW', 'W']),
-  S('Defence', 2, ['D']), S('Goalie', 1, ['G']),
-], { heading, group });
+const proBowl = (conf) => ({
+  id: `probowl-${conf.toLowerCase()}`, side: conf, title: `${conf} Pro Bowl`, points: 1,
+  filter: { conference: conf },
+  sections: [
+    S('Offense', 21, {
+      size: 'big',
+      labels: ['QB', 'QB', 'QB', 'RB', 'RB', 'RB', 'FB', 'WR', 'WR', 'WR', 'WR', 'TE', 'TE', 'T', 'T', 'T', 'G', 'G', 'G', 'C', 'C'],
+      posBySlot: [['QB'], ['QB'], ['QB'], ['RB'], ['RB'], ['RB'], ['FB', 'RB'], ['WR'], ['WR'], ['WR'], ['WR'], ['TE'], ['TE'],
+        ['OT', 'T'], ['OT', 'T'], ['OT', 'T'], ['G', 'OG'], ['G', 'OG'], ['G', 'OG'], ['C'], ['C']],
+    }),
+    S('Defense', 18, {
+      labels: ['DE', 'DE', 'DE', 'DT', 'DT', 'DT', 'OLB', 'OLB', 'OLB', 'ILB', 'ILB', 'CB', 'CB', 'CB', 'CB', 'S', 'S', 'S'],
+      posBySlot: [['DE'], ['DE'], ['DE'], ['DT', 'NT'], ['DT', 'NT'], ['DT', 'NT'], ['OLB', 'LB'], ['OLB', 'LB'], ['OLB', 'LB'],
+        ['ILB', 'LB', 'MLB'], ['ILB', 'LB', 'MLB'], ['CB'], ['CB'], ['CB'], ['CB'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS']],
+    }),
+    S('Special teams', 5, { labels: ['K', 'P', 'LS', 'Returner', 'Special teamer'], posBySlot: [['PK', 'K'], ['P'], ['LS'], ['WR', 'RB', 'CB'], null] }),
+    extras,
+  ],
+});
 
-const mlbAllStar = (lg) => team(`allstar-${lg.toLowerCase()}`, `${lg} All-Stars`, [
-  S('Starting catcher', 1, ['C']), S('Starting first base', 1, ['1B']), S('Starting second base', 1, ['2B']),
-  S('Starting third base', 1, ['3B']), S('Starting shortstop', 1, ['SS']),
-  S('Starting outfield', 3, ['LF', 'CF', 'RF', 'OF']), S('Starting DH', 1, ['DH']),
-  S('Pitchers', 12, ['SP', 'RP', 'P']), S('Reserves', 11),
-], { heading: 'All-Star Game', filter: { conference: lg } });
-const allMlb = (tier) => team(`allmlb-${tier}`, `All-MLB ${tier === 1 ? 'First' : 'Second'} Team`, [
-  S('Catcher', 1, ['C']), S('First base', 1, ['1B']), S('Second base', 1, ['2B']), S('Third base', 1, ['3B']),
-  S('Shortstop', 1, ['SS']), S('Outfield', 3, ['LF', 'CF', 'RF', 'OF']), S('DH', 1, ['DH']),
-  S('Starting pitchers', 5, ['SP', 'P']), S('Relief pitchers', 2, ['RP', 'P']),
-], { heading: 'All-MLB', group: 'allmlb' });
+const nhlDivision = (div) => ({
+  id: `allstar-${div.toLowerCase()}`, side: div, title: `${div} All-Stars`, points: 1,
+  filter: { division: div },
+  sections: [
+    S('Forwards', 6, { size: 'big', labels: Array(6).fill('Forward'), posBySlot: Array(6).fill(NHL_F) }),
+    S('Defence', 3, { size: 'big', labels: Array(3).fill('Defence'), posBySlot: Array(3).fill(['D']) }),
+    S('Goalies', 2, { size: 'big', labels: ['Goalie', 'Goalie'], posBySlot: [['G'], ['G']] }),
+    extras,
+  ],
+});
 
-export const TEAMS = {
+const mlbAllStar = (lg) => ({
+  id: `allstar-${lg.toLowerCase()}`, side: lg, title: `${lg} All-Stars`, points: 1,
+  filter: { conference: lg },
+  sections: [
+    S('Starters', 9, {
+      size: 'big',
+      labels: ['Catcher', 'First base', 'Second base', 'Third base', 'Shortstop', 'Outfield', 'Outfield', 'Outfield', 'Designated hitter'],
+      posBySlot: [['C'], ['1B'], ['2B'], ['3B'], ['SS'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['DH']],
+    }),
+    S('Pitchers', 12, { kind: 'reserve', pos: ['SP', 'RP', 'P'] }),
+    S('Reserves', 11, { kind: 'reserve' }),
+    extras,
+  ],
+});
+
+export const ALLSTARS = {
+  nba: [nbaAllStar('East'), nbaAllStar('West')],
+  nfl: [proBowl('AFC'), proBowl('NFC')],
+  nhl: ['Atlantic', 'Metropolitan', 'Central', 'Pacific'].map(nhlDivision),
+  mlb: [mlbAllStar('AL'), mlbAllStar('NL')],
+};
+export const ALLSTAR_NAME = { nfl: 'Pro Bowl', nba: 'All-Stars', nhl: 'All-Stars', mlb: 'All-Stars' };
+
+// ---------------------------------------------------------------------------
+// Year-end teams (1 point per player)
+// ---------------------------------------------------------------------------
+
+const yearEnd = (id, title, heading, group, sections) => ({ id, title, heading, group, sections, points: 1 });
+const five = (id, title, heading, group) => yearEnd(id, title, heading, group, [S('Players', 5, { size: 'big' })]);
+
+const allPro = (tier) => yearEnd(`allpro-${tier}`, `${tier === 1 ? 'First' : 'Second'} Team All-Pro`, 'All-Pro', 'allpro', [
+  S('Offense', 12, {
+    size: 'big', labels: ['QB', 'RB', 'FB', 'WR', 'WR', 'WR', 'TE', 'T', 'T', 'G', 'G', 'C'],
+    posBySlot: [['QB'], ['RB'], ['FB', 'RB'], ['WR'], ['WR'], ['WR'], ['TE'], ['OT', 'T'], ['OT', 'T'], ['G', 'OG'], ['G', 'OG'], ['C']],
+  }),
+  S('Defense', 12, {
+    labels: ['Edge', 'Edge', 'DT', 'DT', 'LB', 'LB', 'CB', 'CB', 'S', 'S', 'Slot CB', 'DB'],
+    posBySlot: [['DE', 'OLB'], ['DE', 'OLB'], ['DT', 'NT'], ['DT', 'NT'], ['LB', 'ILB', 'OLB'], ['LB', 'ILB', 'OLB'], ['CB'], ['CB'], ['S', 'FS', 'SS'], ['S', 'FS', 'SS'], ['CB'], ['CB', 'S']],
+  }),
+  S('Special teams', 4, { labels: ['K', 'P', 'KR', 'PR'], posBySlot: [['PK', 'K'], ['P'], null, null] }),
+]);
+
+const nhlTeam = (id, title, heading, group) => yearEnd(id, title, heading, group, [
+  S('Lineup', 6, {
+    size: 'big', labels: ['Centre', 'Left wing', 'Right wing', 'Defence', 'Defence', 'Goalie'],
+    posBySlot: [['C'], ['LW', 'W'], ['RW', 'W'], ['D'], ['D'], ['G']],
+  }),
+]);
+
+const allMlb = (tier) => yearEnd(`allmlb-${tier}`, `All-MLB ${tier === 1 ? 'First' : 'Second'} Team`, 'All-MLB', 'allmlb', [
+  S('Position players', 9, {
+    size: 'big', labels: ['C', '1B', '2B', '3B', 'SS', 'OF', 'OF', 'OF', 'DH'],
+    posBySlot: [['C'], ['1B'], ['2B'], ['3B'], ['SS'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['DH']],
+  }),
+  S('Pitchers', 7, { labels: ['SP', 'SP', 'SP', 'SP', 'SP', 'RP', 'RP'], posBySlot: [...Array(5).fill(['SP', 'P']), ['RP', 'P'], ['RP', 'P']] }),
+]);
+
+export const YEAR_END = {
   nba: [
-    nbaAllStar('East'), nbaAllStar('West'),
-    five('allnba-1', 'All-NBA First Team', 'All-NBA', 'allnba'),
-    five('allnba-2', 'All-NBA Second Team', 'All-NBA', 'allnba'),
-    five('allnba-3', 'All-NBA Third Team', 'All-NBA', 'allnba'),
-    five('alldef-1', 'All-Defensive First Team', 'All-Defensive', 'alldef'),
-    five('alldef-2', 'All-Defensive Second Team', 'All-Defensive', 'alldef'),
-    five('allrookie-1', 'All-Rookie First Team', 'All-Rookie', 'allrookie'),
-    five('allrookie-2', 'All-Rookie Second Team', 'All-Rookie', 'allrookie'),
+    five('allnba-1', 'First Team', 'All-NBA', 'allnba'),
+    five('allnba-2', 'Second Team', 'All-NBA', 'allnba'),
+    five('allnba-3', 'Third Team', 'All-NBA', 'allnba'),
+    five('alldef-1', 'First Team', 'All-Defensive', 'alldef'),
+    five('alldef-2', 'Second Team', 'All-Defensive', 'alldef'),
+    five('allrookie-1', 'First Team', 'All-Rookie', 'allrookie'),
+    five('allrookie-2', 'Second Team', 'All-Rookie', 'allrookie'),
   ],
-  nfl: [proBowl('AFC'), proBowl('NFC'), allPro(1), allPro(2)],
+  nfl: [allPro(1), allPro(2)],
   nhl: [
-    nhlDivision('Atlantic'), nhlDivision('Metropolitan'), nhlDivision('Central'), nhlDivision('Pacific'),
-    nhlTeam('allstarteam-1', 'First All-Star Team', 'NHL All-Star Teams', 'nhlteam'),
-    nhlTeam('allstarteam-2', 'Second All-Star Team', 'NHL All-Star Teams', 'nhlteam'),
-    nhlTeam('allrookie', 'All-Rookie Team', 'All-Rookie'),
+    nhlTeam('allstarteam-1', 'First Team', 'NHL All-Star Teams', 'nhlteam'),
+    nhlTeam('allstarteam-2', 'Second Team', 'NHL All-Star Teams', 'nhlteam'),
+    nhlTeam('allrookie', 'All-Rookie Team', 'All-Rookie', null),
   ],
-  mlb: [mlbAllStar('AL'), mlbAllStar('NL'), allMlb(1), allMlb(2)],
+  mlb: [allMlb(1), allMlb(2)],
 };
 
-export const TEAMS_TAB_NAME = { nfl: 'Pro Bowl', nba: 'All-Stars', nhl: 'All-Stars', mlb: 'All-Stars' };
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 export const slotCount = (sheet) => sheet.sections.reduce((n, s) => n + s.n, 0);
 
-// Section + slot index → flat position in the stored array, and back.
 export function slotIndex(sheet, sectionIdx, i) {
   let n = 0;
   for (let s = 0; s < sectionIdx; s++) n += sheet.sections[s].n;
   return n + i;
 }
-export function sectionOf(sheet, flat) {
+
+// Flat position → { section, i } (i = index inside the section)
+export function locate(sheet, flat) {
   let n = 0;
-  for (let s = 0; s < sheet.sections.length; s++) {
-    if (flat < n + sheet.sections[s].n) return sheet.sections[s];
-    n += sheet.sections[s].n;
+  for (const section of sheet.sections) {
+    if (flat < n + section.n) return { section, i: flat - n };
+    n += section.n;
   }
   return null;
+}
+export const sectionOf = (sheet, flat) => locate(sheet, flat)?.section || null;
+
+// Position codes that fit a slot.
+export function slotPositions(sheet, flat) {
+  const loc = locate(sheet, flat);
+  if (!loc) return null;
+  return loc.section.posBySlot?.[loc.i] || loc.section.pos || null;
+}
+export function slotLabel(sheet, flat) {
+  const loc = locate(sheet, flat);
+  return loc?.section.labels?.[loc.i] || null;
 }
 
 // Points per player: picks that appear in the real results.
@@ -153,4 +275,33 @@ export function scoreSheets(sheets, picksByUser, answersBySheet) {
     }
   }
   return totals;
+}
+
+// ---------------------------------------------------------------------------
+// Standings predictions
+// ---------------------------------------------------------------------------
+
+// Real order within a conference: NHL by points (2 per win + 1 per OT loss), others by win %.
+export function realOrder(teams, sport) {
+  const score = (t) => {
+    const gp = t.wins + t.losses + (t.ties || 0);
+    if (sport === 'nhl') return [2 * t.wins + (t.ties || 0), t.wins];
+    return [gp ? (t.wins + (t.ties || 0) / 2) / gp : 0, t.wins];
+  };
+  return [...teams].sort((a, b) => {
+    const [a1, a2] = score(a); const [b1, b2] = score(b);
+    return b1 - a1 || b2 - a2 || a.abbr.localeCompare(b.abbr);
+  }).map((t) => t.abbr);
+}
+
+// 3 points for the exact spot, 1 point for one spot off.
+export function scoreStandings(predicted, actual) {
+  const pos = new Map(actual.map((abbr, i) => [abbr, i]));
+  let points = 0; let exact = 0;
+  predicted.forEach((abbr, i) => {
+    if (!pos.has(abbr)) return;
+    const d = Math.abs(pos.get(abbr) - i);
+    if (d === 0) { points += 3; exact++; } else if (d === 1) points += 1;
+  });
+  return { points, exact, max: actual.length * 3 };
 }
