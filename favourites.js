@@ -48,8 +48,9 @@ export const FAVOURITE_TITLE = { mlb: '2026 finalists' };
 // from the players table, so trades show up automatically; names not found there are skipped.
 export const STARS = {
   nba: [
-    'Shai Gilgeous-Alexander', 'Nikola Jokic', 'Victor Wembanyama', 'Luka Doncic', 'Giannis Antetokounmpo', 'Jayson Tatum',
-    'Anthony Edwards', 'Cade Cunningham', 'Jalen Brunson', 'Donovan Mitchell', 'Tyrese Haliburton', 'Jaylen Brown',
+    // Top of the list follows this season's MVP odds (late Nov 2026).
+    'Victor Wembanyama', 'Luka Doncic', 'Shai Gilgeous-Alexander', 'Nikola Jokic', 'Jayson Tatum', 'Cade Cunningham',
+    'Anthony Edwards', 'Giannis Antetokounmpo', 'Jalen Brunson', 'Donovan Mitchell', 'Tyrese Haliburton', 'Jaylen Brown',
     'Stephen Curry', 'LeBron James', 'Kevin Durant', 'Devin Booker', 'Karl-Anthony Towns', 'Jalen Williams', 'Chet Holmgren',
     'Evan Mobley', 'Paolo Banchero', 'Franz Wagner', 'Jamal Murray', 'Tyrese Maxey', 'Joel Embiid', 'Anthony Davis',
     'Kawhi Leonard', 'James Harden', 'De\'Aaron Fox', 'Trae Young', 'Jalen Johnson', 'Scottie Barnes', 'Alperen Sengun',

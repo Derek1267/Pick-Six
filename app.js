@@ -2013,7 +2013,15 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
   const choose = async (id) => {
     const sheet = sheets.find((s) => s.qid === active.qid);
     const arr = active.mode === 'answer' ? answers(sheet) : mine(sheet);
+    // Never the same player twice on a roster (or across a set like All-NBA 1st/2nd/3rd).
+    if (id && arr[active.flat] !== id && usedIds(sheet, active.mode).has(id)) {
+      toast(`${entityOf(id, teams).name} is already on this ${kind === 'awards' ? 'ballot' : 'team'}.`, 'error');
+      return;
+    }
     arr[active.flat] = id;
+    // Record it before moving to the next spot, so the next spot's suggestions leave this player out.
+    if (active.mode === 'answer') settings.set(sheet.qid, { ...(settings.get(sheet.qid) || { question_id: sheet.qid }), answers: arr });
+    else picksByUser.get(me).set(sheet.qid, arr);
     // Move straight on to the next empty spot in the same section.
     const sec = SEL.sectionOf(sheet, active.flat);
     const next = id ? arr.findIndex((v, i) => !v && i > active.flat && SEL.sectionOf(sheet, i) === sec) : -1;

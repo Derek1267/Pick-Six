@@ -388,7 +388,8 @@ export function suggestFor(sport, sheet, flat, pool, { isAward = false } = {}) {
   if (open && !isAward && label && sec && !['alt', 'reserve'].includes(sec.kind) && sport !== 'nba') return [];
   const ok = (p) => (!rule?.only || rule.only.includes(p.position)) && (!rule?.not || !rule.not.includes(p.position))
     && (open || fit.includes(p.position));
-  const rank = (p) => (p.position === label ? -1 : open || !label ? 0 : fit.indexOf(p.position));
+  // Exact position first (a DT spot shows DTs before DEs); otherwise keep the pool's order (best first).
+  const rank = (p) => (p.position === label ? 0 : 1);
   const list = pool.filter(ok).map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || a.i - b.i).map((x) => x.p);
   if (!open || isAward || sport === 'nba' || sport === 'mls') return list.slice(0, 5);
   const seen = new Set();
