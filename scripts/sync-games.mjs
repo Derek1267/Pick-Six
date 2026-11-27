@@ -335,7 +335,15 @@ export function playersFromNllHtml(html, teams) {
 async function collectNllPlayers(teams) {
   const res = await fetch('https://www.nll.com/players/', { headers: { 'User-Agent': 'pick-six-sync (friends league site)' } });
   if (!res.ok) throw new Error(`nll.com ${res.status}`);
-  return playersFromNllHtml(await res.text(), teams);
+  const html = await res.text();
+  const players = playersFromNllHtml(html, teams);
+  if (!players.length) {
+    // Help work out what changed on their side (no secrets here, it's a public page).
+    const i = html.search(/\/players\/\d+/);
+    console.warn(`[nll] no players parsed from nll.com (${html.length} chars, ${(html.match(/\/players\/\d+/g) || []).length} profile links)`);
+    console.warn(`[nll] sample: ${html.slice(Math.max(0, i - 300), i + 900).replace(/\s+/g, ' ')}`);
+  }
+  return players;
 }
 
 async function collectPlayers(sport, knownTeams = []) {
