@@ -83,8 +83,8 @@ export const AWARDS = {
     award('norris', 'Norris Trophy', 'Best defenceman', { cat: 'season', pos: ['D'] }),
     award('calder', 'Calder Trophy', 'Rookie of the year', { cat: 'season' }),
     award('selke', 'Selke Trophy', 'Best defensive forward', { cat: 'season', pos: ['C', 'LW', 'RW'] }),
-    award('artross', 'Art Ross Trophy', 'Most points', { cat: 'stats' }),
-    award('rocket', 'Rocket Richard Trophy', 'Most goals', { cat: 'stats' }),
+    award('artross', 'Art Ross Trophy', 'Most points', { cat: 'stats', pos: ['C', 'LW', 'RW', 'D'] }),
+    award('rocket', 'Rocket Richard Trophy', 'Most goals', { cat: 'stats', pos: ['C', 'LW', 'RW', 'D'] }),
     award('jennings', 'William M. Jennings Trophy', 'Fewest goals against', { cat: 'stats', pos: ['G'] }),
     teamAward('adams', 'Jack Adams Award', 'Coach of the year', { cat: 'staff' }),
     teamAward('gm', 'General Manager of the Year', 'Front office', { cat: 'staff' }),
@@ -100,12 +100,12 @@ export const AWARDS = {
     award('nlcy', 'NL Cy Young', null, { cat: 'season', filter: { conference: 'NL' }, pos: ['SP', 'RP'] }),
     award('alroy', 'AL Rookie of the Year', null, { cat: 'season', filter: { conference: 'AL' } }),
     award('nlroy', 'NL Rookie of the Year', null, { cat: 'season', filter: { conference: 'NL' } }),
-    award('alrel', 'AL Reliever of the Year', 'Mariano Rivera Award', { cat: 'season', filter: { conference: 'AL' } }),
-    award('nlrel', 'NL Reliever of the Year', 'Trevor Hoffman Award', { cat: 'season', filter: { conference: 'NL' } }),
+    award('alrel', 'AL Reliever of the Year', 'Mariano Rivera Award', { cat: 'season', filter: { conference: 'AL' }, pos: ['RP'] }),
+    award('nlrel', 'NL Reliever of the Year', 'Trevor Hoffman Award', { cat: 'season', filter: { conference: 'NL' }, pos: ['RP'] }),
     award('alcomeback', 'AL Comeback Player', null, { cat: 'season', filter: { conference: 'AL' } }),
     award('nlcomeback', 'NL Comeback Player', null, { cat: 'season', filter: { conference: 'NL' } }),
-    award('alaaron', 'AL Hank Aaron Award', 'Best hitter', { cat: 'stats', filter: { conference: 'AL' } }),
-    award('nlaaron', 'NL Hank Aaron Award', 'Best hitter', { cat: 'stats', filter: { conference: 'NL' } }),
+    award('alaaron', 'AL Hank Aaron Award', 'Best hitter', { cat: 'stats', filter: { conference: 'AL' }, pos: ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'OF', 'DH'] }),
+    award('nlaaron', 'NL Hank Aaron Award', 'Best hitter', { cat: 'stats', filter: { conference: 'NL' }, pos: ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'OF', 'DH'] }),
     teamAward('almoy', 'AL Manager of the Year', 'Manager', { cat: 'staff', filter: { conference: 'AL' } }),
     teamAward('nlmoy', 'NL Manager of the Year', 'Manager', { cat: 'staff', filter: { conference: 'NL' } }),
     award('alcsmvp', 'ALCS MVP', null, { cat: 'post', filter: { conference: 'AL' } }),
@@ -121,8 +121,8 @@ export const AWARDS = {
     award('young', 'Young Player of the Year', 'Age 22 and under', { cat: 'season' }),
     award('newcomer', 'Newcomer of the Year', 'New to MLS', { cat: 'season' }),
     award('comeback', 'Comeback Player of the Year', null, { cat: 'season' }),
-    award('boot', 'Golden Boot', 'Most goals', { cat: 'stats' }),
-    award('assists', 'Assists leader', 'Most assists', { cat: 'stats' }),
+    award('boot', 'Golden Boot', 'Most goals', { cat: 'stats', pos: ['F', 'M'] }),
+    award('assists', 'Assists leader', 'Most assists', { cat: 'stats', pos: ['M', 'F'] }),
     teamAward('coy', 'Coach of the Year', 'Sigi Schmid Award', { cat: 'staff' }),
     award('cupmvp', 'MLS Cup MVP', null, { cat: 'post' }),
     award('goal', 'Goal of the Year', null, { cat: 'events' }),
@@ -133,10 +133,10 @@ export const AWARDS = {
     award('mvp', 'Most Valuable Player', null, { cat: 'season' }),
     award('roy', 'Rookie of the Year', null, { cat: 'season' }),
     award('goalie', 'Goaltender of the Year', null, { cat: 'season', pos: ['G'] }),
-    award('dpoy', 'Defensive Player of the Year', null, { cat: 'season' }),
+    award('dpoy', 'Defensive Player of the Year', null, { cat: 'season', pos: ['D', 'T'] }),
     award('transition', 'Transition Player of the Year', null, { cat: 'season', pos: ['T'] }),
-    award('points', 'Scoring leader', 'Most points', { cat: 'stats' }),
-    award('goals', 'Goals leader', 'Most goals', { cat: 'stats' }),
+    award('points', 'Scoring leader', 'Most points', { cat: 'stats', pos: ['F', 'T'] }),
+    award('goals', 'Goals leader', 'Most goals', { cat: 'stats', pos: ['F', 'T'] }),
     teamAward('coy', 'Coach of the Year', 'Les Bartley Award', { cat: 'staff' }),
     teamAward('gm', 'GM of the Year', 'Front office', { cat: 'staff' }),
     award('finalsmvp', 'Finals MVP', null, { cat: 'post' }),
@@ -226,7 +226,7 @@ const mlbAllStar = (lg) => ({
       posBySlot: [['C'], ['1B'], ['2B'], ['3B'], ['SS'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['LF', 'CF', 'RF', 'OF'], ['DH']],
     }),
     S('Pitchers', 12, { kind: 'reserve', pos: ['SP', 'RP', 'P'] }),
-    S('Reserves', 11, { kind: 'reserve' }),
+    S('Reserves', 11, { kind: 'reserve', pos: ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'OF', 'DH'] }),
     extras,
   ],
   layout: { surface: 'diamond', groups: [{ rows: DIAMOND }] },
@@ -287,7 +287,7 @@ const nhlTeam = (id, title, heading, group) => ({
 // Box lacrosse: three forwards up top, two defenders, the goalie in net.
 const nllTeam = (tier) => ({
   ...yearEnd(`allnll-${tier}`, `${tier === 1 ? 'First' : 'Second'} Team`, 'All-NLL', 'allnll', [
-    S('Lineup', 6, { size: 'big', labels: ['F', 'F', 'F', 'D', 'D', 'G'], posBySlot: [null, null, null, null, null, ['G']] }),
+    S('Lineup', 6, { size: 'big', labels: ['F', 'F', 'F', 'D', 'D', 'G'], posBySlot: [['F', 'T'], ['F', 'T'], ['F', 'T'], ['D', 'T'], ['D', 'T'], ['G']] }),
   ]),
   layout: { surface: 'rink', groups: [{ rows: [[0, 1, 2], [3, _, 4], [_, 5, _]] }] },
 });
@@ -373,6 +373,27 @@ export function slotRule(sport, sheet, flat) {
   if (sport === 'mls' && fit?.length) return fit.includes('G') ? { only: ['G', 'GK'] } : { not: ['G', 'GK'] };
   if (sport === 'mlb' && fit?.length) return fit.some((p) => PITCHERS.includes(p)) ? { only: PITCHERS } : { not: PITCHERS };
   return null;
+}
+
+// Suggestions for one spot from a ranked pool of players: only players who fit the spot,
+// exact position first (an LF spot shows left fielders before other outfielders), and for
+// open spots (reserves, injury replacements) a spread of positions rather than five of one.
+export function suggestFor(sport, sheet, flat, pool, { isAward = false } = {}) {
+  const fit = slotPositions(sheet, flat);
+  const rule = slotRule(sport, sheet, flat);
+  const label = slotLabel(sheet, flat);
+  const sec = sectionOf(sheet, flat);
+  const open = !fit?.length;
+  // A named special-teams role with no position (returner, long snapper…): nobody to suggest.
+  if (open && !isAward && label && sec && !['alt', 'reserve'].includes(sec.kind) && sport !== 'nba') return [];
+  const ok = (p) => (!rule?.only || rule.only.includes(p.position)) && (!rule?.not || !rule.not.includes(p.position))
+    && (open || fit.includes(p.position));
+  const rank = (p) => (p.position === label ? -1 : open || !label ? 0 : fit.indexOf(p.position));
+  const list = pool.filter(ok).map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || a.i - b.i).map((x) => x.p);
+  if (!open || isAward || sport === 'nba' || sport === 'mls') return list.slice(0, 5);
+  const seen = new Set();
+  const spread = list.filter((p) => (seen.has(p.position) ? false : seen.add(p.position)));
+  return [...spread, ...list.filter((p) => !spread.includes(p))].slice(0, 5);
 }
 
 export function slotLabel(sheet, flat) {

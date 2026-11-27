@@ -80,7 +80,8 @@ export const STARS = {
     'Cale Makar', 'Quinn Hughes', 'Zach Werenski', 'Evan Bouchard', 'Rasmus Dahlin', 'Roman Josi', 'Victor Hedman', 'Miro Heiskanen',
     'Adam Fox', 'Josh Morrissey', 'Lane Hutson', 'Moritz Seider', 'Jakob Chychrun', 'Noah Dobson', 'Charlie McAvoy', 'Jaccob Slavin',
     'Connor Hellebuyck', 'Andrei Vasilevskiy', 'Igor Shesterkin', 'Jake Oettinger', 'Ilya Sorokin', 'Jesper Wallstedt', 'Logan Thompson',
-    'Sergei Bobrovsky', 'Jeremy Swayman', 'Linus Ullmark', 'Juuse Saros', 'Filip Gustavsson', 'Pyotr Kochetkov', 'Mackenzie Blackwood',
+    'Sergei Bobrovsky', 'Jeremy Swayman', 'Linus Ullmark', 'Juuse Saros', 'Pyotr Kochetkov', 'Mackenzie Blackwood',
+    'Thatcher Demko', 'Lukas Dostal', 'Dustin Wolf', 'Darcy Kuemper', 'Joey Daccord', 'Adin Hill', 'Stuart Skinner',
   ],
   mlb: [
     'Shohei Ohtani', 'Aaron Judge', 'Bobby Witt Jr.', 'Juan Soto', 'Cal Raleigh', 'Kyle Tucker', 'Mookie Betts', 'Freddie Freeman',
@@ -112,4 +113,22 @@ export const STARS = {
 };
 
 // Awards where a list of stars would be wrong (rookies, newcomers, comebacks): no suggestions.
-export const NO_SUGGESTIONS = /roy|calder|rookie|young|newcomer|comeback|cpoy|teammate|sportsmanship|humanitarian|socialjustice|clemente|hustle|goal$/;
+export const NO_SUGGESTIONS = /roy|calder|rookie|young|newcomer|comeback|cpoy|teammate|sportsmanship|humanitarian|socialjustice|clemente|hustle|wpmoy|masterton|clancy|byng|goal$/;
+
+// Pools for teams that only certain players can make. Rookie teams use the rookie favourites;
+// All-Defensive uses known defenders. Anything not listed here uses STARS.
+export const ROOKIES = {
+  nba: ['Yaxel Lendeborg', 'Cameron Boozer', 'Darius Acuff Jr.', 'Caleb Wilson', 'Darryn Peterson', 'AJ Dybantsa'],
+  nhl: ['Jacob Fowler', 'Michael Brandsegg-Nygard', 'Roman Kantserov'],
+};
+export const DEFENDERS = {
+  nba: ['Victor Wembanyama', 'Chet Holmgren', 'Ausar Thompson', 'Rudy Gobert', 'Bam Adebayo', 'Dyson Daniels', 'Derrick White',
+    'Jaren Jackson Jr.', 'Evan Mobley', 'OG Anunoby', 'Amen Thompson', 'Alex Caruso', 'Jrue Holiday', 'Herbert Jones', 'Luguentz Dort',
+    'Draymond Green', 'Jalen Williams', 'Toumani Camara', 'Ivica Zubac', 'Mikal Bridges', 'Jalen Duren', 'Scottie Barnes'],
+};
+// Which pool a year-end or All-Star sheet draws from.
+export function suggestionPool(sport, sheetId) {
+  if (/rookie/.test(sheetId)) return { names: ROOKIES[sport] || [], title: 'Rookie favourites' };
+  if (/alldef/.test(sheetId)) return { names: DEFENDERS[sport] || [], title: 'Suggestions' };
+  return { names: STARS[sport] || [], title: 'Suggestions' };
+}

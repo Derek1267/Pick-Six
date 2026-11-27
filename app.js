@@ -12,7 +12,7 @@ import * as BR from './bracket.js';
 import * as SEL from './selections.js';
 import { ICON, CAT_ICON, SURFACE, ILLO } from './icons.js';
 import { STAFF_ROLE, staffFor } from './staff.js';
-import { FAVOURITES, FAVOURITES_AS_OF, FAVOURITE_TITLE, STARS, NO_SUGGESTIONS } from './favourites.js';
+import { FAVOURITES, FAVOURITES_AS_OF, FAVOURITE_TITLE, NO_SUGGESTIONS, suggestionPool } from './favourites.js';
 
 const app = document.getElementById('app');
 const accountNav = document.getElementById('account');
@@ -1574,16 +1574,14 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     if (!curated?.length) {
       // No odds for this spot: suggest well-known players who fit it (position, conference, not used yet).
       if (kind === 'awards' && NO_SUGGESTIONS.test(awardId)) return '';
-      const rule = SEL.slotRule(sport, sheet, active.flat);
-      const fit = SEL.slotPositions(sheet, active.flat);
-      const ok = (p) => !p.id.startsWith('custom:') && !used.has(p.id) && (!allowed || allowed.has(p.team_abbr))
-        && (!rule?.only || rule.only.includes(p.position)) && (!rule?.not || !rule.not.includes(p.position))
-        && (kind !== 'awards' || !fit?.length || fit.includes(p.position));
-      const pool = (await favouritePlayers(sport, STARS[sport] || [])).filter(ok);
-      const fits = (p) => (fit?.length ? fit.includes(p.position) : true);
-      const picks = [...pool.filter(fits), ...pool.filter((p) => !fits(p))].slice(0, 5);
+      // Only players who fit the spot (position, conference) and aren't used yet.
+      const { names, title } = suggestionPool(sport, kind === 'awards' ? '' : sheet.id);
+      const pool = (await favouritePlayers(sport, names))
+        .filter((p) => !p.id.startsWith('custom:') && !used.has(p.id) && (!allowed || allowed.has(p.team_abbr)));
+      const picks = SEL.suggestFor(sport, sheet, active.flat, pool, { isAward: kind === 'awards' });
       if (!picks.length) return '';
-      return `<h3 class="pick-sub">${ICON.star}Suggestions <span class="muted">well-known players for this spot, not odds</span></h3>
+      const note = title === 'Rookie favourites' ? `this season’s top rookies, as of ${FAVOURITES_AS_OF}` : 'well-known players for this spot, not odds';
+      return `<h3 class="pick-sub">${ICON.star}${title} <span class="muted">${note}</span></h3>
         <div class="plist">${picks.map((p, i) => pickRow(p.id, { kind: 'player', name: p.name, headshot: p.headshot },
           [p.team_abbr, p.position].filter(Boolean).join(' · '), i + 1)).join('')}</div>`;
     }
