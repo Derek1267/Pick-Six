@@ -692,3 +692,16 @@ button.spot.empty:hover, button.spot.empty:focus-visible { border-style: solid; 
 .h2h-tag { font-size: .78rem; font-weight: 700; color: var(--muted); }
 .h2h-tag.up { color: var(--hit); } .h2h-tag.down { color: var(--miss); }
 @media (max-width: 600px) { .recap-card { flex-direction: column; align-items: stretch; } }
+
+/* manage: league rules, activity, seasons */
+.rules { display: grid; gap: .5rem; margin: 1rem 0; }
+.rules h3 { margin: 0 0 .2rem; }
+.rule { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .7rem; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 8px; font-weight: 400; cursor: pointer; }
+.rule input[type="checkbox"] { width: 1.1rem; height: 1.1rem; margin-top: .15rem; accent-color: var(--grape); }
+.rule span { display: grid; gap: .1rem; }
+.rule small { color: var(--muted); font-size: .8rem; }
+.rule.select { grid-template-columns: 1fr minmax(0, 14rem); align-items: center; }
+.rules .btn { justify-self: start; }
+.member-list .activity { display: block; font-size: .76rem; }
+.seasons { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.seasons p { flex-basis: 100%; margin: .2rem 0 0; }

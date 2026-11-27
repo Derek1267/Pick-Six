@@ -1319,6 +1319,19 @@ function openManage(league, members) {
     return false;
   };
 
+  const rules = settingsOf(league);
+  let lastPick = new Map(); // user → most recent pick time we can see
+  let nextSeason = null;
+  const ago = (t) => {
+    if (!t) return 'No picks yet';
+    const d = Math.floor((Date.now() - new Date(t)) / 864e5);
+    return d <= 0 ? 'Picked today' : d === 1 ? 'Last pick yesterday' : `Last pick ${d} days ago`;
+  };
+  const toggle = (key, label, help) => `
+    <label class="rule"><input type="checkbox" name="${key}" ${rules[key] ? 'checked' : ''} ${isOwner ? '' : 'disabled'}>
+      <span><strong>${label}</strong><small>${help}</small></span></label>`;
+  const unit = sportInfo(league.sport).unit;
+
   const draw = () => {
     dialog.innerHTML = `
       <div class="manage">
@@ -1329,14 +1342,36 @@ function openManage(league, members) {
             <label>League name <input name="name" maxlength="50" required value="${esc(league.name)}"></label>
             <button class="btn small" type="submit">Save name</button>
           </form>` : ''}
+        <form id="rules-form" class="rules">
+          <h3>League rules</h3>
+          ${toggle('lockOfWeek', `Lock of the ${unit}`, `One pick per ${unit} counts double.`)}
+          ${toggle('upsetBonus', 'Upset bonus', '+1 for a correct pick on the team with the worse record.')}
+          ${toggle('autoPick', 'Fill in missed picks', 'Anyone who forgets gets the team with the better record instead of nothing.')}
+          ${toggle('lateCatchUp', 'Late joiners catch up', `${unit[0].toUpperCase() + unit.slice(1)}s played before someone joined count as that ${unit}'s lowest score.`)}
+          <label class="rule select"><span><strong>Pick deadline</strong><small>When picks lock.</small></span>
+            <select name="deadline" ${isOwner ? '' : 'disabled'}>
+              <option value="game" ${rules.deadline !== 'week' ? 'selected' : ''}>Each game at its start</option>
+              <option value="week" ${rules.deadline === 'week' ? 'selected' : ''}>Whole ${unit} at the first game</option>
+            </select></label>
+          ${isOwner ? '<button class="btn small" type="submit">Save rules</button>' : '<p class="muted small">Only the league owner can change these.</p>'}
+        </form>
         <h3>Players (${members.length})</h3>
         <ul class="member-list">
           ${members.map((m) => `
             <li><span>${esc(m.name)}${m.user_id === me ? ' <span class="muted small">(you)</span>' : ''}
-              ${m.role === 'owner' ? ' <span class="sport-tag">Owner</span>' : ''}</span>
+              ${m.role === 'owner' ? ' <span class="sport-tag">Owner</span>' : ''}
+              <small class="muted activity">${ago(lastPick.get(m.user_id))}</small></span>
               ${isOwner && m.user_id !== me ? `<button class="btn small ghost" data-remove="${m.user_id}">Remove</button>` : ''}
             </li>`).join('')}
         </ul>
+        <h3>Seasons</h3>
+        <div class="seasons">
+          ${league.previous_id ? `<a class="btn small ghost" href="#/league/${league.previous_id}" data-close>${ICON.back}Last season</a>` : ''}
+          ${nextSeason ? `<a class="btn small" href="#/league/${nextSeason}" data-close>Next season</a>`
+            : isOwner ? '<button class="btn small secondary" data-renew>Start next season</button>' : ''}
+          <p class="muted small">${nextSeason ? 'This season is kept here so you can look back at it.'
+            : isOwner ? 'Starts a new league for next season with the same players and rules. This season stays as it is.' : 'The owner can start next season from here.'}</p>
+        </div>
         <div class="danger-zone">
           ${isOwner
             ? `<button class="btn small ghost" data-delete>Delete league</button>
@@ -1379,6 +1414,16 @@ function openManage(league, members) {
       go('#/');
       return;
     }
+    const renew = e.target.closest('[data-renew]');
+    if (renew) {
+      if (!confirmTap(renew, 'Tap again to start next season')) return;
+      const { data, error } = await sb.rpc('renew_league', { p_league: league.id });
+      if (error) return toast(friendlyError(error), 'error');
+      dialog.close();
+      toast('Next season started. Same players, same rules.', 'good');
+      go(`#/league/${data.id}`);
+      return;
+    }
     const del = e.target.closest('[data-delete]');
     if (del) {
       if (!confirmTap(del, 'Tap again to delete for good')) return;
@@ -1393,7 +1438,22 @@ function openManage(league, members) {
     }
   };
 
+  const saveRules = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const settings = { lockOfWeek: f.has('lockOfWeek'), upsetBonus: f.has('upsetBonus'), autoPick: f.has('autoPick'),
+      lateCatchUp: f.has('lateCatchUp'), deadline: f.get('deadline') };
+    const { error } = await sb.from('leagues').update({ settings }).eq('id', league.id);
+    if (error) return toast(friendlyError(error), 'error');
+    forgetLeague(league.id);
+    league.settings = settings;
+    toast('Rules saved', 'good');
+    dialog.close();
+    render();
+  };
+
   dialog.onsubmit = async (e) => {
+    if (e.target.id === 'rules-form') return saveRules(e);
     if (e.target.id !== 'rename-form') return;
     e.preventDefault();
     const name = new FormData(e.target).get('name').trim();
@@ -1409,6 +1469,15 @@ function openManage(league, members) {
 
   draw();
   dialog.showModal();
+  // Activity and next season load after the dialog opens.
+  Promise.all([
+    sb.from('picks').select('user_id, updated_at').eq('league_id', league.id).order('updated_at', { ascending: false }).limit(1000),
+    sb.from('leagues').select('id').eq('previous_id', league.id).limit(1),
+  ]).then(([pk, nx]) => {
+    for (const p of pk.data || []) if (!lastPick.has(p.user_id)) lastPick.set(p.user_id, p.updated_at);
+    nextSeason = nx.data?.[0]?.id || null;
+    if (dialog.open) draw();
+  });
 }
 
 // ===========================================================================
