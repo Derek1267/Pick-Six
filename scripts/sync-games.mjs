@@ -304,7 +304,42 @@ export function playersFromRoster(data, sport, teamAbbr) {
   }));
 }
 
-async function collectPlayers(sport) {
+// NLL: ESPN has no lacrosse rosters, so read the league's own player list (nll.com/players).
+// It's plain HTML: each player has a profile link (/players/<id>/<slug>/) followed by their
+// team, number, height, weight and a position code (F, T, D or G). Parsed by text, not by
+// class names, so small markup changes don't break it.
+export function playersFromNllHtml(html, teams) {
+  const text = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ')
+    .replace(/&#0?39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  const link = /<a[^>]+href="(?:https?:\/\/(?:www\.)?nll\.com)?\/players\/(\d+)\/[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+  const hits = [];
+  for (const m of html.matchAll(link)) {
+    const name = text(m[2]);
+    if (name && /[a-z]/i.test(name) && name.length < 60) hits.push({ id: m[1], name, at: m.index, end: m.index + m[0].length });
+  }
+  // Keep the first named link per player; the text up to the next player belongs to this one.
+  const seen = new Set();
+  const list = hits.filter((h) => (seen.has(h.id) ? false : seen.add(h.id)));
+  const byName = teams.map((t) => ({ ...t, key: t.name.toLowerCase() })).sort((a, b) => b.key.length - a.key.length);
+  return list.map((h, i) => {
+    const chunk = text(html.slice(h.end, list[i + 1]?.at ?? h.end + 3000)).toLowerCase();
+    const team = byName.find((t) => chunk.includes(t.key) || chunk.includes(t.key.replace(/\s+/g, '')));
+    const pos = (chunk.toUpperCase().match(/(?:^|\s)([FTDG])(?=\s|$)/g) || []).pop()?.trim() || null;
+    return {
+      id: `nll-${h.id}`, sport: 'nll', name: h.name, team_abbr: team?.abbr || null,
+      position: pos, headshot: null, updated_at: new Date().toISOString(),
+    };
+  });
+}
+
+async function collectNllPlayers(teams) {
+  const res = await fetch('https://www.nll.com/players/', { headers: { 'User-Agent': 'pick-six-sync (friends league site)' } });
+  if (!res.ok) throw new Error(`nll.com ${res.status}`);
+  return playersFromNllHtml(await res.text(), teams);
+}
+
+async function collectPlayers(sport, knownTeams = []) {
+  if (sport === 'nll') return collectNllPlayers(knownTeams);
   const base = `https://site.api.espn.com/apis/site/v2/sports/${SPORTS[sport].path}`;
   const teamsData = await espn(`${base}/teams`);
   const teams = (teamsData.sports?.[0]?.leagues?.[0]?.teams || []).map((t) => t.team).filter(Boolean);
@@ -511,7 +546,7 @@ async function syncSport(sport) {
   let players = [];
   if ((ALL || flag('--players')) && !FIXTURE) {
     try {
-      players = await collectPlayers(sport);
+      players = await collectPlayers(sport, teams);
       console.log(`[${sport}] ${players.length} players`);
     } catch (err) {
       console.warn(`[${sport}] skipping players: ${err.message}`);
