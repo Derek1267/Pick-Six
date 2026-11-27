@@ -507,6 +507,9 @@ function renderHow() {
         <h2 class="icon-head">${ICON.board}Scoring &amp; standings</h2>
         <ul>
           <li>1 point for every correct pick. Ties and postponed games don't count either way, except in <strong>MLS</strong>, where you can pick a draw.</li>
+          <li><strong>Lock of the week:</strong> tap “Lock it” on one pick each week (each day in daily sports) and it counts double.</li>
+          <li>The league owner can also turn on an <strong>upset bonus</strong> (+1 for a correct underdog pick), <strong>fill in missed picks</strong>,
+            a <strong>whole-week deadline</strong>, and <strong>catch-up scores</strong> for late joiners, in Manage → League rules.</li>
           <li><strong>Standings</strong> rank by total correct picks, then win percentage.</li>
           <li>Each week someone takes the <strong>weekly win</strong> (most correct that week, Monday to Sunday for daily sports). Ties share it.</li>
           <li>Scores update about every 15 minutes during games.</li>
@@ -555,11 +558,37 @@ function renderHow() {
 // Home: your leagues, create, join
 // ---------------------------------------------------------------------------
 
+// One table across every league you're in: totals for each friend you share a league with.
+async function allSportsTable(leagues, stale) {
+  const results = await Promise.all(leagues.map((l) => sb.rpc('league_leaderboard', { p_league: l.id })));
+  if (stale()) return;
+  const people = new Map();
+  results.forEach((res, i) => {
+    for (const r of res.data || []) {
+      const p = people.get(r.user_id) || people.set(r.user_id, { name: r.display_name, correct: 0, graded: 0, points: 0, leagues: new Set() }).get(r.user_id);
+      p.leagues.add(leagues[i].sport);
+      p.correct += r.correct || 0; p.graded += r.graded || 0; p.points += r.points || 0;
+    }
+  });
+  const rows = [...people.entries()].filter(([, p]) => p.leagues.size > 1 || p.graded)
+    .sort((a, b) => b[1].points - a[1].points || b[1].correct - a[1].correct);
+  const box = document.getElementById('all-sports');
+  if (!box || rows.length < 2) return;
+  const me = state.session.user.id;
+  box.innerHTML = `<section class="card flush all-sports">
+    <h2 class="icon-head">${ICON.board}All sports</h2>
+    <table class="standings"><thead><tr><th>#</th><th>Player</th><th>Sports</th><th class="num">Pts</th><th class="num">W</th><th class="num">L</th></tr></thead>
+    <tbody>${rows.map(([id, p], i) => `<tr class="${id === me ? 'me' : ''}"><td class="rank">${i + 1}</td><td class="player">${esc(p.name)}</td>
+      <td class="muted small">${[...p.leagues].map((sp) => sportInfo(sp).name).join(', ')}</td>
+      <td class="num strong">${p.points}</td><td class="num">${p.correct}</td><td class="num">${p.graded - p.correct}</td></tr>`).join('')}</tbody></table>
+  </section>`;
+}
+
 async function renderHome(stale) {
   app.innerHTML = '<div class="loading">Loading your leagues…</div>';
   const nowIso = new Date().toISOString();
   const [{ data: leagues, error }, ...upcoming] = await Promise.all([
-    sb.from('leagues').select('id, name, invite_code, season, sport, league_members(count)').order('created_at'),
+    sb.from('leagues').select('id, name, invite_code, season, sport, previous_id, league_members(count)').order('created_at'),
     // A sport can host new leagues only while it has games coming up.
     ...Object.keys(SPORTS).map((sport) => sb.from('games').select('id').eq('sport', sport)
       .gt('start_time', nowIso).limit(1)),
@@ -569,18 +598,23 @@ async function renderHome(stale) {
   if (stale()) return;
   if (error) { app.innerHTML = `<p class="error">${esc(friendlyError(error))}</p>`; return; }
 
-  const cards = leagues.map((l) => `
+  // A league that has a next season is a past season.
+  const renewed = new Set(leagues.map((l) => l.previous_id).filter(Boolean));
+  const current = leagues.filter((l) => !renewed.has(l.id));
+  const past = leagues.filter((l) => renewed.has(l.id));
+  const card = (l) => `
     <a class="league-card" href="#/league/${l.id}">
       <span class="league-name">${esc(l.name)}</span>
-      <span class="muted small"><span class="sport-tag">${esc(sportInfo(l.sport).name)}</span> ${l.league_members?.[0]?.count ?? 1} player${(l.league_members?.[0]?.count ?? 1) === 1 ? '' : 's'}</span>
+      <span class="muted small"><span class="sport-tag">${esc(sportInfo(l.sport).name)}</span> ${seasonName(l)} · ${l.league_members?.[0]?.count ?? 1} player${(l.league_members?.[0]?.count ?? 1) === 1 ? '' : 's'}</span>
       <span class="arrow" aria-hidden="true">→</span>
-    </a>`).join('');
+    </a>`;
+  const cards = current.map(card).join('');
 
   app.innerHTML = `
     <section class="page-head">
       <h1>Your leagues</h1>
     </section>
-    ${leagues.length ? `<div class="league-list">${cards}</div>` : `
+    ${current.length ? `<div class="league-list">${cards}</div><div id="all-sports"></div>` : `
       <div class="empty card illustrated">${ILLO.leagues}
         <p><strong>No leagues yet.</strong> Start one and send the invite link to your group chat,
         or join with a code a friend sent you.</p>
@@ -603,7 +637,10 @@ async function renderHome(stale) {
         <input name="code" maxlength="6" required placeholder="Invite code" class="code-input" autocapitalize="characters">
         <button class="btn secondary" type="submit">Join</button>
       </form>
-    </div>`;
+    </div>
+    ${past.length ? `<details class="past-seasons"><summary>Past seasons (${past.length})</summary>
+      <div class="league-list">${past.map(card).join('')}</div></details>` : ''}`;
+  if (current.length > 1) allSportsTable(current, stale);
 
   document.getElementById('create-form').addEventListener('submit', async (e) => {
     e.preventDefault();

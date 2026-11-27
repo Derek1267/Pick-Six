@@ -701,7 +701,14 @@ button.spot.empty:hover, button.spot.empty:focus-visible { border-style: solid; 
 .rule span { display: grid; gap: .1rem; }
 .rule small { color: var(--muted); font-size: .8rem; }
 .rule.select { grid-template-columns: 1fr minmax(0, 14rem); align-items: center; }
-.rules .btn { justify-self: start; }
+.rules .btn { justify-self: stretch; }
 .member-list .activity { display: block; font-size: .76rem; }
 .seasons { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .seasons p { flex-basis: 100%; margin: .2rem 0 0; }
+
+/* home: all sports table, past seasons */
+.all-sports { margin: 1rem 0; }
+.all-sports h2 { padding: 1rem 1rem .4rem; margin: 0; }
+.past-seasons { margin-top: 1.4rem; }
+.past-seasons summary { cursor: pointer; font-weight: 700; color: var(--muted); margin-bottom: .6rem; }
+.recap-card .btn { flex: none; white-space: nowrap; }
