@@ -311,23 +311,26 @@ export function playersFromRoster(data, sport, teamAbbr) {
 export function playersFromNllHtml(html, teams) {
   const text = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ')
     .replace(/&#0?39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-  const link = /<a[^>]+href="(?:https?:\/\/(?:www\.)?nll\.com)?\/players\/(\d+)\/[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+  const link = /<a[^>]+href=["'](?:https?:\/\/(?:www\.)?nll\.com)?\/players\/(\d+)\/[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
   const hits = [];
   for (const m of html.matchAll(link)) {
     const name = text(m[2]);
-    if (name && /[a-z]/i.test(name) && name.length < 60) hits.push({ id: m[1], name, at: m.index, end: m.index + m[0].length });
+    const photo = m[2].match(/url\((['"]?)(https?:[^)'"]+)\1\)/)?.[2] || m[2].match(/<img[^>]+src=["'](https?:[^"']+)["']/)?.[1] || null;
+    if (name && /[a-z]/i.test(name) && name.length < 60) hits.push({ id: m[1], name, photo, at: m.index, end: m.index + m[0].length });
   }
   // Keep the first named link per player; the text up to the next player belongs to this one.
   const seen = new Set();
   const list = hits.filter((h) => (seen.has(h.id) ? false : seen.add(h.id)));
   const byName = teams.map((t) => ({ ...t, key: t.name.toLowerCase() })).sort((a, b) => b.key.length - a.key.length);
   return list.map((h, i) => {
-    const chunk = text(html.slice(h.end, list[i + 1]?.at ?? h.end + 3000)).toLowerCase();
+    const raw = html.slice(h.end, list[i + 1]?.at ?? h.end + 3000);
+    const chunk = text(raw).toLowerCase();
     const team = byName.find((t) => chunk.includes(t.key) || chunk.includes(t.key.replace(/\s+/g, '')));
-    const pos = (chunk.toUpperCase().match(/(?:^|\s)([FTDG])(?=\s|$)/g) || []).pop()?.trim() || null;
+    const pos = raw.match(/class=["'][^"']*\bposition\b[^"']*["'][^>]*>\s*([FTDG])\s*</)?.[1]
+      || (chunk.toUpperCase().match(/(?:^|\s)([FTDG])(?=\s|$)/g) || []).pop()?.trim() || null;
     return {
       id: `nll-${h.id}`, sport: 'nll', name: h.name, team_abbr: team?.abbr || null,
-      position: pos, headshot: null, updated_at: new Date().toISOString(),
+      position: pos, headshot: h.photo, updated_at: new Date().toISOString(),
     };
   });
 }
