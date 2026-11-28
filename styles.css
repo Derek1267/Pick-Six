@@ -590,10 +590,16 @@ button.spot.empty:hover, button.spot.empty:focus-visible { border-style: solid; 
 @media (max-width: 860px) { .odds-grid { grid-template-columns: 1fr; } }
 .odds-conf h4 { margin-bottom: .4rem; font: 800 1.3rem var(--display); }
 .odds { width: 100%; border-collapse: separate; border-spacing: 2px; table-layout: fixed; font-size: .86rem; }
-.odds th { padding: .3rem .2rem; font-size: .74rem; font-weight: 600; color: var(--muted); text-align: center !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.odds th { padding: .3rem .15rem; font-size: .74rem; font-weight: 600; line-height: 1.15; color: var(--muted); text-align: center !important; vertical-align: bottom; white-space: normal; overflow-wrap: normal; hyphens: none; }
 .odds th:first-child { width: 7.2rem; text-align: left !important; }
 .odds-team { display: flex; align-items: center; gap: .4rem; padding: .25rem .2rem; white-space: nowrap; }
 .odds-team .seed { width: 1.1rem; }
+@media (max-width: 520px) {
+  .odds { font-size: .8rem; }
+  .odds th { font-size: .68rem; }
+  .odds th:first-child { width: 5.6rem; }
+  .odds-team { gap: .3rem; }
+}
 .heat { height: 2.1rem; border-radius: 4px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600;
   background: color-mix(in srgb, var(--grape) var(--t), var(--surface-2)); color: var(--text); }
 .heat.deep { color: #fff; }

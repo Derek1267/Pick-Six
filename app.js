@@ -752,13 +752,21 @@ async function renderLeague(route, stale, { quiet = false } = {}) {
   // Keep live games fresh: re-load every minute while anything is in progress or about to lock.
   const live = games.some((g) => g.status === 'in'
     || (g.status === 'pre' && new Date(g.start_time) - Date.now() < 15 * 6e4 && new Date(g.start_time) > Date.now() - 4 * 36e5));
+  clearInterval(state.refreshTimer); // a quiet refresh must replace its timer, not stack another one
   if (live) {
-    state.refreshTimer = setInterval(() => {
+    const timer = setInterval(() => {
+      // Only ever refresh the page it was started on; if you've moved on, stop.
+      const now = parseRoute();
+      if (state.refreshTimer !== timer || now.name !== 'league' || now.id !== route.id || now.tab !== route.tab || now.week !== route.week) {
+        clearInterval(timer);
+        return;
+      }
       if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) {
         const id = ++state.renderId;
         renderLeague(route, () => id !== state.renderId, { quiet: true });
       }
     }, 60_000);
+    state.refreshTimer = timer;
   }
 }
 
@@ -1897,9 +1905,18 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
         </section>`).join('')}`;
   };
 
+  // Redraw without moving the page: the popup and its keyboard can push iOS back to the top.
+  let keepY = null;
+  const holdScroll = (y) => {
+    if (y == null) return;
+    window.scrollTo(0, y);
+    requestAnimationFrame(() => { if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y); });
+  };
   const draw = () => {
     if (!document.body.contains(root)) return;
+    const y = dialog.open && keepY != null ? keepY : window.scrollY;
     root.innerHTML = kind === 'awards' ? drawAwards() : kind === 'allstars' ? drawAllStars() : drawYearEnd();
+    holdScroll(y);
   };
 
   // ----- the pick popup -----
@@ -1977,13 +1994,13 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
       </header>
       <div class="pick-body">${current ? `<div class="pick-current">${portrait(current, 40)}<span class="pname"><small>Current pick</small><strong>${esc(current.name)}</strong></span>
         <button class="btn small secondary" data-remove>Remove</button></div>` : ''}${searchBox}<div id="pick-favs"><p class="muted small">Loading suggestions…</p></div></div>`;
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) { keepY = window.scrollY; dialog.showModal(); }
     const myActive = active;
     const favs = await favouritesHtml(sheet);
     if (active !== myActive) return;
     const box = dialog.querySelector('#pick-favs');
     if (box) box.innerHTML = favs;
-    dialog.querySelector('#sheet-search')?.focus({ preventScroll: true });
+    if (!matchMedia('(pointer: coarse)').matches) dialog.querySelector('#sheet-search')?.focus({ preventScroll: true });
   };
 
   const closePicker = () => { active = null; if (dialog.open) dialog.close(); };
@@ -2048,7 +2065,12 @@ async function mountSheets(root, league, members, stale, { sheets: defs, kind })
     const el = e.target.closest('[data-choose]');
     if (el && active) choose(el.dataset.choose);
   };
-  dialog.onclose = () => { active = null; };
+  dialog.onclose = () => {
+    active = null;
+    const y = keepY; keepY = null;
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur?.();
+    holdScroll(y);
+  };
   root.onkeydown = (e) => {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.spot.tappable')) { e.preventDefault(); e.target.click(); }
   };
